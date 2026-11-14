@@ -49,6 +49,8 @@ fn final_decomposed_export_classifies_dds_as_reusable_textures() {
         paint_variants: vec![],
         animations: vec![],
         physics_grid: None,
+        inventory_containers: Vec::new(),
+        root_item: serde_json::Map::new(),
     };
     let opts = ExportOptions {
         kind: crate::ExportKind::Decomposed,

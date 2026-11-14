@@ -47,6 +47,11 @@ pub(crate) struct DecomposedInput {
     pub animations: Vec<crate::clip::Clip>,
     /// `root_entity.physics_grid` (see [`crate::physics_grid`]); only with `include_physics`.
     pub physics_grid: Option<serde_json::Value>,
+    /// Loadout items that are inventory containers (`inventory_containers[]`),
+    /// geometry-less items included.
+    pub inventory_containers: Vec<crate::pipeline::inventory_containers::VehicleInventoryContainer>,
+    /// Item footprint fields merged into `root_entity` (`pipeline/item_occupancy.rs`).
+    pub root_item: serde_json::Map<String, serde_json::Value>,
 }
 
 pub(crate) type ExistingInteriorAssetMap = HashMap<String, (String, Option<String>)>;
@@ -154,6 +159,8 @@ struct SceneInstanceRecord {
     palette_id: Option<String>,
     parent_node_name: Option<String>,
     parent_entity_name: Option<String>,
+    /// Item-port names from the root entity to this item (`None` off-loadout).
+    port_path: Option<Vec<String>>,
     source_transform_basis: Option<String>,
     local_transform_sc: Option<[[f32; 4]; 4]>,
     resolved_no_rotation: bool,
@@ -306,7 +313,43 @@ fn docking_entity_attachment_offset(
     Some(target_world.inverse().transform_point3(desired_world))
 }
 
-fn resolve_child_instance_transforms(input: &DecomposedInput) -> Vec<ResolvedChildTransform> {
+struct ResolvedInstanceTransforms {
+    children: Vec<ResolvedChildTransform>,
+    /// Parallel to `DecomposedInput::inventory_containers`.
+    inventory_containers: Vec<ResolvedChildTransform>,
+}
+
+/// The scene-graph payload an inventory container attaches as: no mesh, no NMC,
+/// the same attachment fields as a child (so the same transform rule applies).
+fn inventory_container_payload(
+    container: &crate::pipeline::inventory_containers::VehicleInventoryContainer,
+) -> crate::types::EntityPayload {
+    crate::types::EntityPayload {
+        mesh: empty_scene_graph_mesh(),
+        materials: None,
+        textures: None,
+        nmc: None,
+        palette: None,
+        geometry_path: String::new(),
+        material_path: String::new(),
+        bones: Vec::new(),
+        skeleton_source_path: None,
+        entity_name: container.entity_name.clone(),
+        entity_category: None,
+        attach_def_type: None,
+        parent_node_name: container.parent_node_name.clone(),
+        parent_entity_name: container.parent_entity_name.clone(),
+        no_rotation: container.no_rotation,
+        offset_position: container.offset_position,
+        offset_rotation: container.offset_rotation,
+        detach_direction: [0.0; 3],
+        port_flags: container.port_flags.clone(),
+        port_path: container.port_path.clone(),
+        ui_bindings: Vec::new(),
+    }
+}
+
+fn resolve_child_instance_transforms(input: &DecomposedInput) -> ResolvedInstanceTransforms {
     let mut builder = GlbBuilder::new();
     let dummy_packed = PackedMeshInfo {
         mesh_idx: 0,
@@ -332,81 +375,101 @@ fn resolve_child_instance_transforms(input: &DecomposedInput) -> Vec<ResolvedChi
 
     builder.attach_skeleton_bones(&input.root_bones, &scene_nodes);
 
+    let children = input
+        .children
+        .iter()
+        .map(|child| resolve_instance_transform(&mut builder, &scene_nodes, child))
+        .collect();
+    // Containers attach after every child: their parents' nodes then exist, and
+    // their (mesh-less) nodes cannot shadow a child's parent lookup.
+    // TODO(WP-K1): as for children, a `no_rotation` container resolves its
+    // helper by name in one global map, so among siblings sharing an entity
+    // name it uses the first one's helper world matrix.
+    let inventory_containers = input
+        .inventory_containers
+        .iter()
+        .map(|container| {
+            resolve_instance_transform(&mut builder, &scene_nodes, &inventory_container_payload(container))
+        })
+        .collect();
+    ResolvedInstanceTransforms { children, inventory_containers }
+}
+
+fn resolve_instance_transform(
+    builder: &mut GlbBuilder,
+    scene_nodes: &[json::Index<json::Node>],
+    child: &crate::types::EntityPayload,
+) -> ResolvedChildTransform {
     let mut load_textures =
         |_materials: Option<&crate::mtl::MtlFile>, _palette: Option<&crate::mtl::TintPalette>| None;
-    let mut resolved = Vec::with_capacity(input.children.len());
+    let resolved_local_matrix = if child.no_rotation {
+        let target_idx = builder
+            .node_name_to_idx
+            .get(&child.parent_node_name.to_lowercase())
+            .copied()
+            .or_else(|| {
+                builder
+                    .node_name_to_idx
+                    .get(&child.parent_entity_name.to_lowercase())
+                    .copied()
+            })
+            .or_else(|| scene_nodes.first().map(|node| node.value() as u32))
+            .unwrap_or(0);
+        let mut offset_position = child.offset_position;
+        if let Some(docking_offset) =
+            docking_entity_attachment_offset(builder, target_idx as usize, child)
+        {
+            offset_position = [docking_offset.x, docking_offset.y, docking_offset.z];
+        }
+        Some(resolve_no_rotation_local_matrix(
+            builder.compute_node_world_matrix(target_idx as usize),
+            offset_position,
+            child.offset_rotation,
+        ))
+    } else {
+        None
+    };
 
-    for child in &input.children {
-        let resolved_local_matrix = if child.no_rotation {
-            let target_idx = builder
-                .node_name_to_idx
-                .get(&child.parent_node_name.to_lowercase())
-                .copied()
-                .or_else(|| {
-                    builder
-                        .node_name_to_idx
-                        .get(&child.parent_entity_name.to_lowercase())
-                        .copied()
-                })
-                .or_else(|| scene_nodes.first().map(|node| node.value() as u32))
-                .unwrap_or(0);
-            let mut offset_position = child.offset_position;
-            if let Some(docking_offset) =
-                docking_entity_attachment_offset(&builder, target_idx as usize, child)
-            {
-                offset_position = [docking_offset.x, docking_offset.y, docking_offset.z];
-            }
-            Some(resolve_no_rotation_local_matrix(
-                builder.compute_node_world_matrix(target_idx as usize),
-                offset_position,
-                child.offset_rotation,
-            ))
-        } else {
-            None
-        };
+    let child_idx = builder.attach_child_entity(
+        crate::types::EntityPayload {
+            mesh: empty_scene_graph_mesh(),
+            materials: None,
+            textures: None,
+            nmc: child.nmc.clone(),
+            palette: None,
+            geometry_path: child.geometry_path.clone(),
+            material_path: child.material_path.clone(),
+            bones: child.bones.clone(),
+            skeleton_source_path: child.skeleton_source_path.clone(),
+            entity_name: child.entity_name.clone(),
+            entity_category: child.entity_category.clone(),
+            attach_def_type: child.attach_def_type.clone(),
+            parent_node_name: child.parent_node_name.clone(),
+            parent_entity_name: child.parent_entity_name.clone(),
+            no_rotation: child.no_rotation,
+            offset_position: child.offset_position,
+            offset_rotation: child.offset_rotation,
+            detach_direction: child.detach_direction,
+            port_flags: child.port_flags.clone(),
+            port_path: child.port_path.clone(),
+            ui_bindings: child.ui_bindings.clone(),
+        },
+        scene_nodes,
+        MaterialMode::None,
+        None,
+        &mut load_textures,
+        resolved_local_matrix,
+    );
 
-        let child_idx = builder.attach_child_entity(
-            crate::types::EntityPayload {
-                mesh: empty_scene_graph_mesh(),
-                materials: None,
-                textures: None,
-                nmc: child.nmc.clone(),
-                palette: None,
-                geometry_path: child.geometry_path.clone(),
-                material_path: child.material_path.clone(),
-                bones: child.bones.clone(),
-                skeleton_source_path: child.skeleton_source_path.clone(),
-                entity_name: child.entity_name.clone(),
-                entity_category: child.entity_category.clone(),
-                attach_def_type: child.attach_def_type.clone(),
-                parent_node_name: child.parent_node_name.clone(),
-                parent_entity_name: child.parent_entity_name.clone(),
-                no_rotation: child.no_rotation,
-                offset_position: child.offset_position,
-                offset_rotation: child.offset_rotation,
-                detach_direction: child.detach_direction,
-                port_flags: child.port_flags.clone(),
-                ui_bindings: child.ui_bindings.clone(),
-            },
-            &scene_nodes,
-            MaterialMode::None,
-            None,
-            &mut load_textures,
-            resolved_local_matrix,
-        );
-
-        let local_transform_sc = flat_4x4_to_rows(
-            builder.nodes_json[child_idx as usize]
-                .matrix
-                .unwrap_or_else(identity_flat_4x4),
-        );
-        resolved.push(ResolvedChildTransform {
-            local_transform_sc,
-            resolved_no_rotation: child.no_rotation,
-        });
+    let local_transform_sc = flat_4x4_to_rows(
+        builder.nodes_json[child_idx as usize]
+            .matrix
+            .unwrap_or_else(identity_flat_4x4),
+    );
+    ResolvedChildTransform {
+        local_transform_sc,
+        resolved_no_rotation: child.no_rotation,
     }
-
-    resolved
 }
 
 #[derive(Debug, Clone)]
@@ -436,6 +499,7 @@ struct InteriorContainerRecord {
     lights: Vec<serde_json::Value>,
     room_volumes: Vec<serde_json::Value>,
     proximity_sensors: Vec<serde_json::Value>,
+    inventory_containers: Vec<serde_json::Value>,
 }
 
 #[derive(Debug, Clone)]
@@ -1452,7 +1516,7 @@ pub(crate) fn write_decomposed_export(
             }
         }
 
-        let resolved_transform = resolved_child_transforms[index];
+        let resolved_transform = resolved_child_transforms.children[index];
         child_instances.push(SceneInstanceRecord {
             item_type: child.attach_def_type.clone(),
             entity_name: child.entity_name.clone(),
@@ -1463,6 +1527,7 @@ pub(crate) fn write_decomposed_export(
             palette_id,
             parent_node_name: Some(child.parent_node_name.clone()),
             parent_entity_name: Some(child.parent_entity_name.clone()),
+            port_path: child.port_path.clone(),
             source_transform_basis: Some("gltf_y_up".to_string()),
             local_transform_sc: Some(resolved_transform.local_transform_sc),
             resolved_no_rotation: resolved_transform.resolved_no_rotation,
@@ -1929,6 +1994,7 @@ pub(crate) fn write_decomposed_export(
             lights,
             room_volumes: container.room_volumes.iter().map(|volume| volume.to_json()).collect(),
             proximity_sensors: container.proximity_sensors.iter().map(|sensor| sensor.to_json()).collect(),
+            inventory_containers: container.inventory_containers.iter().map(|c| c.to_json()).collect(),
         });
 
         if container_count > 0 && total_interior_placements == 0 {
@@ -2080,6 +2146,13 @@ pub(crate) fn write_decomposed_export(
     if let Some(grid) = &input.physics_grid {
         scene_manifest["root_entity"]["physics_grid"] = grid.clone();
     }
+    for (key, value) in &input.root_item {
+        scene_manifest["root_entity"][key] = value.clone();
+    }
+    scene_manifest["inventory_containers"] = vehicle_inventory_containers_json(
+        &input.inventory_containers,
+        &resolved_child_transforms.inventory_containers,
+    );
     for child in scene_manifest["children"].as_array_mut().expect("children array") {
         let name = child["entity_name"].as_str().expect("child name").to_owned();
         child["lights"] = serde_json::json!(entity_light_records.remove(&name).unwrap_or_default());
@@ -2344,6 +2417,22 @@ fn build_livery_manifest_value(records: &BTreeMap<String, LiveryUsage>) -> serde
     })
 }
 
+/// The top-level `inventory_containers[]`, each with its resolved local transform.
+fn vehicle_inventory_containers_json(
+    containers: &[crate::pipeline::inventory_containers::VehicleInventoryContainer],
+    transforms: &[ResolvedChildTransform],
+) -> serde_json::Value {
+    serde_json::Value::Array(
+        containers
+            .iter()
+            .zip(transforms)
+            .map(|(container, transform)| {
+                container.to_json(transform.local_transform_sc, transform.resolved_no_rotation)
+            })
+            .collect(),
+    )
+}
+
 fn scene_instance_json(instance: &SceneInstanceRecord) -> serde_json::Value {
     serde_json::json!({
         "entity_name": instance.entity_name,
@@ -2354,6 +2443,7 @@ fn scene_instance_json(instance: &SceneInstanceRecord) -> serde_json::Value {
         "palette_id": instance.palette_id,
         "parent_node_name": instance.parent_node_name,
         "parent_entity_name": instance.parent_entity_name,
+        "port_path": instance.port_path,
         "source_transform_basis": instance.source_transform_basis,
         "local_transform_sc": instance.local_transform_sc,
         "resolved_no_rotation": instance.resolved_no_rotation,
@@ -2393,6 +2483,7 @@ fn interior_container_json(container: &InteriorContainerRecord) -> serde_json::V
         "lights": container.lights,
         "room_volumes": container.room_volumes,
         "proximity_sensors": container.proximity_sensors,
+        "inventory_containers": container.inventory_containers,
     })
 }
 
@@ -7795,6 +7886,7 @@ mod tests {
             palette_id: Some("palette/test".into()),
             parent_node_name: Some("hardpoint_weapon_left".into()),
             parent_entity_name: Some("root".into()),
+            port_path: Some(vec!["hardpoint_weapon_left".into()]),
             source_transform_basis: Some("gltf_y_up".into()),
             local_transform_sc: Some(crate::socpak::build_container_transform(
                 [1.0, 2.0, 3.0],
@@ -7849,6 +7941,7 @@ mod tests {
             lights: vec![serde_json::json!({ "name": "light_a" })],
             room_volumes: vec![serde_json::json!({ "kind": "box" })],
             proximity_sensors: vec![serde_json::json!({ "entity_id": "sensor-id", "links": ["door-id"] })],
+            inventory_containers: vec![serde_json::json!({ "entity_id": "grid-id" })],
         };
 
         let value = build_scene_manifest_value(
@@ -7908,6 +8001,8 @@ mod tests {
         assert_eq!(placement["links"], serde_json::json!(["target-id"]));
         assert!(placement["loadout_owner_entity_id"].is_null());
         assert!(placement["item_port_name"].is_null());
+        assert_eq!(value["children"][0]["port_path"], serde_json::json!(["hardpoint_weapon_left"]));
+        assert_eq!(value["interiors"][0]["inventory_containers"][0]["entity_id"], "grid-id");
         assert_eq!(
             value["interiors"][0]["proximity_sensors"][0]["links"],
             serde_json::json!(["door-id"])
@@ -8111,6 +8206,7 @@ mod tests {
             offset_rotation: [0.0; 3],
             detach_direction: [0.0; 3],
             port_flags: String::new(),
+            port_path: None,
             ui_bindings: Vec::new(),
         };
         assert!(should_export_engine_glow_targets(&child));
@@ -8120,6 +8216,55 @@ mod tests {
             ..child
         };
         assert!(!should_export_engine_glow_targets(&maneuver_child));
+    }
+
+    #[test]
+    fn inventory_containers_resolve_with_the_child_transform_rule() {
+        let container = crate::pipeline::inventory_containers::VehicleInventoryContainer {
+            entity_name: "synthetic_grid".into(),
+            entity_class_guid: "class-guid".into(),
+            port_path: Some(vec!["port_plate".into(), "port_grid".into()]),
+            parent_port_path: Some(vec!["port_plate".into()]),
+            parent_entity_name: "synthetic_plate".into(),
+            parent_node_name: "helper_grid".into(),
+            no_rotation: false,
+            offset_position: [1.0, 2.0, 3.0],
+            offset_rotation: [0.0, 0.0, 90.0],
+            port_flags: String::new(),
+            container: serde_json::json!({}),
+        };
+        let input = DecomposedInput {
+            entity_name: "synthetic_root".into(),
+            geometry_path: String::new(),
+            material_path: String::new(),
+            assembly_kind: None,
+            weapon_assembly: None,
+            weapon_assembly_diagnostics: None,
+            root_mesh: sample_mesh(vec![]),
+            root_materials: None,
+            root_nmc: None,
+            root_palette: None,
+            available_palettes: Vec::new(),
+            root_bones: Vec::new(),
+            animation_sources: Vec::new(),
+            root_animation_controller: None,
+            children: Vec::new(),
+            interiors: LoadedInteriors::default(),
+            paint_variants: Vec::new(),
+            animations: Vec::new(),
+            physics_grid: None,
+            inventory_containers: vec![container.clone()],
+            root_item: serde_json::Map::new(),
+        };
+        let resolved = resolve_child_instance_transforms(&input);
+        assert!(resolved.children.is_empty());
+        let expected = flat_4x4_to_rows(
+            offset_to_gltf_matrix(container.offset_position, container.offset_rotation).unwrap(),
+        );
+        assert_eq!(resolved.inventory_containers[0].local_transform_sc, expected);
+        let json = vehicle_inventory_containers_json(&input.inventory_containers, &resolved.inventory_containers);
+        assert_eq!(json[0]["local_transform_sc"], serde_json::json!(expected));
+        assert_eq!(json[0]["parent_port_path"], serde_json::json!(["port_plate"]));
     }
 
     #[test]
@@ -8264,6 +8409,7 @@ mod tests {
             offset_rotation: [0.0; 3],
             detach_direction: [0.0; 3],
             port_flags: "Docking_Request_Accepting".to_string(),
+            port_path: None,
             ui_bindings: Vec::new(),
         };
 

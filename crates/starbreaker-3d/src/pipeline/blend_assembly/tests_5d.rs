@@ -44,6 +44,8 @@ fn assign_decal_materials_basic() {
         paint_variants: vec![],
         animations: Vec::new(),
         physics_grid: None,
+        inventory_containers: Vec::new(),
+        root_item: serde_json::Map::new(),
     };
 
     let result = assign_decal_materials_to_vertex_groups(&input);
@@ -87,6 +89,8 @@ fn assign_decal_materials_no_materials() {
         paint_variants: vec![],
         animations: Vec::new(),
         physics_grid: None,
+        inventory_containers: Vec::new(),
+        root_item: serde_json::Map::new(),
     };
 
     let result = assign_decal_materials_to_vertex_groups(&input);
@@ -130,6 +134,8 @@ fn assign_decal_materials_empty_mesh() {
         paint_variants: vec![],
         animations: Vec::new(),
         physics_grid: None,
+        inventory_containers: Vec::new(),
+        root_item: serde_json::Map::new(),
     };
 
     let result = assign_decal_materials_to_vertex_groups(&input);
@@ -202,6 +208,7 @@ fn assign_decal_materials_multiple_children() {
                 offset_rotation: [0.0, 0.0, 0.0],
                 detach_direction: [0.0, 0.0, 0.0],
                 port_flags: "".to_string(),
+                port_path: None,
                 geometry_path: "/test".to_string(),
                 material_path: "/test".to_string(),
                 ui_bindings: Vec::new(),
@@ -211,6 +218,8 @@ fn assign_decal_materials_multiple_children() {
         paint_variants: vec![],
         animations: Vec::new(),
         physics_grid: None,
+        inventory_containers: Vec::new(),
+        root_item: serde_json::Map::new(),
     };
 
     let result = assign_decal_materials_to_vertex_groups(&input);
@@ -287,6 +296,7 @@ fn assign_decal_materials_with_child_mesh() {
                 offset_rotation: [0.0, 0.0, 0.0],
                 detach_direction: [0.0, 0.0, 0.0],
                 port_flags: "".to_string(),
+                port_path: None,
                 geometry_path: "/test".to_string(),
                 material_path: "/test".to_string(),
                 ui_bindings: Vec::new(),
@@ -296,6 +306,8 @@ fn assign_decal_materials_with_child_mesh() {
         paint_variants: vec![],
         animations: Vec::new(),
         physics_grid: None,
+        inventory_containers: Vec::new(),
+        root_item: serde_json::Map::new(),
     };
 
     let result = assign_decal_materials_to_vertex_groups(&input);

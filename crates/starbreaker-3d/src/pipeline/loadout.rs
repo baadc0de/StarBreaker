@@ -208,6 +208,7 @@ pub fn resolve_loadout_meshes(
                     part_children.push(crate::types::ResolvedNode {
                         entity_name: wheel.name.clone(),
                         attachment_name: wheel.name.clone(),
+                        item_port_name: None,
                         no_rotation: false,
                         offset_position: wheel_offset,
                         offset_rotation: [0.0; 3],
@@ -232,6 +233,7 @@ pub fn resolve_loadout_meshes(
             children.push(crate::types::ResolvedNode {
                 entity_name: part.name.clone(),
                 attachment_name: part.name.clone(),
+                item_port_name: None,
                 no_rotation: false,
                 offset_position: part_offset,
                 offset_rotation: [0.0; 3],
@@ -256,6 +258,7 @@ pub fn resolve_loadout_meshes(
     Ok(crate::types::ResolvedNode {
         entity_name: tree.root.entity_name.clone(),
         attachment_name: String::new(),
+        item_port_name: None,
         no_rotation: false,
         offset_position: [0.0; 3],
         offset_rotation: [0.0; 3],
@@ -305,6 +308,7 @@ pub(crate) fn resolve_children(
                 return crate::types::ResolvedNode {
                     entity_name: node.entity_name.clone(),
                     attachment_name,
+                    item_port_name: Some(node.item_port_name.clone()),
                     no_rotation: node.no_rotation,
                     offset_position: node.offset_position,
                     offset_rotation: node.offset_rotation,
@@ -329,6 +333,7 @@ pub(crate) fn resolve_children(
                 return crate::types::ResolvedNode {
                     entity_name: node.entity_name.clone(),
                     attachment_name,
+                    item_port_name: Some(node.item_port_name.clone()),
                     no_rotation: node.no_rotation,
                     offset_position: node.offset_position,
                     offset_rotation: node.offset_rotation,
@@ -351,6 +356,7 @@ pub(crate) fn resolve_children(
                 return crate::types::ResolvedNode {
                     entity_name: node.entity_name.clone(),
                     attachment_name,
+                    item_port_name: Some(node.item_port_name.clone()),
                     no_rotation: node.no_rotation,
                     offset_position: node.offset_position,
                     offset_rotation: node.offset_rotation,
@@ -408,6 +414,7 @@ pub(crate) fn resolve_children(
             crate::types::ResolvedNode {
                 entity_name: node.entity_name.clone(),
                 attachment_name,
+                item_port_name: Some(node.item_port_name.clone()),
                 no_rotation: node.no_rotation,
                 offset_position: node.offset_position,
                 offset_rotation: node.offset_rotation,

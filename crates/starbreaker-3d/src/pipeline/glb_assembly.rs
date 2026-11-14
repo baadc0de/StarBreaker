@@ -254,6 +254,7 @@ pub fn assemble_glb_with_loadout_with_progress(
                     offset_rotation: [0.0; 3],
                     detach_direction: [0.0; 3],
                     port_flags: String::new(),
+                    port_path: None,
                     ui_bindings: Vec::new(),
                 });
                 log::info!("  landing gear '{gear_path}' → '{bone_name}', {verts} verts");
@@ -476,6 +477,14 @@ pub fn assemble_glb_with_loadout_with_progress(
         } else {
             None
         };
+        // Cargo grids and other inventory containers of the loadout (geometry-less
+        // items included), and the root's own item footprint.
+        let inventory_containers = if opts.include_attachments {
+            super::inventory_containers::collect_vehicle_containers(db, &resolved.children, &resolved.entity_name)
+        } else {
+            Vec::new()
+        };
+        let root_item = super::item_occupancy::root_item_fields(db, record, &localization);
         let decomposed_input = crate::decomposed::DecomposedInput {
             entity_name: resolved.entity_name.clone(),
             geometry_path: geometry_path.clone(),
@@ -500,6 +509,8 @@ pub fn assemble_glb_with_loadout_with_progress(
             paint_variants,
             animations: Vec::new(),
             physics_grid,
+            inventory_containers,
+            root_item,
         };
 
         let phase_start = Instant::now();

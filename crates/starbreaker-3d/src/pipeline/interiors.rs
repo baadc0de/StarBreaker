@@ -7,7 +7,8 @@
 //! `tint_palette_hash` (hash for texture cache keys) and
 //! `expand_loadout_into_placements` (loadout→interior placement expansion).
 //! Placements carry their container entity identity and links, and containers
-//! their proximity sensors (resolved in `interior_entities.rs`).
+//! their proximity sensors (resolved in `interior_entities.rs`) and inventory
+//! containers (`inventory_containers.rs`).
 //! Public types: `LoadedInteriors`, `InteriorCgfEntry`, `InteriorContainerData`.
 
 use crate::socpak::light_component::LightResolver;
@@ -69,6 +70,8 @@ pub(crate) struct InteriorContainerData {
     pub palette: Option<mtl::TintPalette>,
     /// Proximity sensors (walk-up triggers) of this container.
     pub proximity_sensors: Vec<super::interior_entities::ProximitySensor>,
+    /// Inventory containers (e.g. freight-elevator cargo grids) of this container.
+    pub inventory_containers: Vec<super::inventory_containers::InteriorInventoryContainer>,
 }
 
 /// Discovery pass: parse socpaks to find unique CGF paths and placements.
@@ -663,6 +666,7 @@ pub(crate) fn build_interiors_from_payloads(
     // Built lazily — only entities that resolve via GUID trigger loadout walks.
     let mut entity_index: Option<starbreaker_datacore::loadout::EntityIndex> = None;
     let mut sensor_resolver = super::interior_entities::SensorResolver::new(db);
+    let mut container_resolver = super::inventory_containers::ContainerResolver::new(db);
 
     for payload in payloads {
         log::debug!(
@@ -674,6 +678,7 @@ pub(crate) fn build_interiors_from_payloads(
 
         let mut placements = Vec::new();
         let mut proximity_sensors = Vec::new();
+        let mut inventory_containers = Vec::new();
         let mut placement_keys: HashSet<(String, [u32; 16])> = HashSet::new();
         // Resolve each distinct per-object tint palette once per payload.
         let mut palette_cache: HashMap<String, Option<mtl::TintPalette>> = HashMap::new();
@@ -683,6 +688,16 @@ pub(crate) fn build_interiors_from_payloads(
             // class's sensor component; its geometry, if any, is placed as usual.
             if let Some(sensor) = sensor_resolver.sensor(im) {
                 proximity_sensors.push(sensor);
+            }
+            // So is an inventory container (a cargo grid): by its class's
+            // inventory-container component, with or without geometry.
+            // TODO(WP-K1): containers attached through an interior entity's
+            // loadout (`expand_loadout_into_placements`) are not listed, nor
+            // the `SCLoadingPlatformManagerParams.loadingPlatformEntityReferences`
+            // that link a freight-elevator manager (authored in its `.soc`
+            // `PropertiesDataCore`, in a parent object container) to its grid.
+            if let Some(container) = container_resolver.interior(im) {
+                inventory_containers.push(container);
             }
             let (cgf_path, mtl_path) = if !im.cgf_path.is_empty() {
                 (im.cgf_path.clone(), im.material_path.clone())
@@ -833,6 +848,7 @@ pub(crate) fn build_interiors_from_payloads(
             // Gemini weapon decal + near-black tints) to the whole interior.
             palette: None,
             proximity_sensors,
+            inventory_containers,
         });
     }
 
@@ -1962,6 +1978,7 @@ mod tests {
                     lights: Vec::new(),
                     palette: None,
                     proximity_sensors: Vec::new(),
+                    inventory_containers: Vec::new(),
                 },
                 // The root entity's own interior attached at a hull helper bone
                 // (the RSI Aurora Mk2 `hardpoint_interior_oc` cabin case):
@@ -1976,6 +1993,7 @@ mod tests {
                     lights: Vec::new(),
                     palette: None,
                     proximity_sensors: Vec::new(),
+                    inventory_containers: Vec::new(),
                 },
                 // A genuine child-entity container: its placements are in the
                 // child's frame and must be left untouched.
@@ -1989,6 +2007,7 @@ mod tests {
                     lights: Vec::new(),
                     palette: None,
                     proximity_sensors: Vec::new(),
+                    inventory_containers: Vec::new(),
                 },
             ],
         };
@@ -2012,6 +2031,7 @@ mod tests {
         let child = crate::types::ResolvedNode {
             entity_name: "MISC_Hull_C_Int_Rear".to_string(),
             attachment_name: "hardpoint_body_int_rear".to_string(),
+            item_port_name: None,
             no_rotation: false,
             offset_position: [0.0; 3],
             offset_rotation: [0.0; 3],
@@ -2057,6 +2077,7 @@ mod tests {
         let child = crate::types::ResolvedNode {
             entity_name: "MISC_Hull_C_CentralWalkway".to_string(),
             attachment_name: "hardpoint_CentralWalkway".to_string(),
+            item_port_name: None,
             no_rotation: false,
             offset_position: [0.0; 3],
             offset_rotation: [0.0; 3],

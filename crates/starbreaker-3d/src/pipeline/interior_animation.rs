@@ -148,6 +148,7 @@ pub(crate) fn extract_animated_interior_children(
             let node = ResolvedNode {
                 entity_name: cga_entity_name(geometry_path),
                 attachment_name: String::new(),
+                item_port_name: None,
                 no_rotation: false,
                 offset_position: [0.0; 3],
                 offset_rotation: [0.0; 3],
@@ -193,6 +194,7 @@ pub(crate) fn extract_animated_interior_children(
             offset_rotation: ap.offset_rotation,
             detach_direction: [0.0; 3],
             port_flags: String::new(),
+            port_path: None,
             ui_bindings: Vec::new(),
         });
     }

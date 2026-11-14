@@ -2225,6 +2225,7 @@ fn create_test_input(entity_name: &str, num_children: usize) -> DecomposedInput 
             offset_rotation: [0.0, 0.0, 0.0],
             detach_direction: [0.0, 0.0, 0.0],
             port_flags: String::new(),
+            port_path: None,
             ui_bindings: Vec::new(),
         });
     }
@@ -2252,6 +2253,8 @@ fn create_test_input(entity_name: &str, num_children: usize) -> DecomposedInput 
         paint_variants: vec![],
         animations: Vec::new(),
         physics_grid: None,
+        inventory_containers: Vec::new(),
+        root_item: serde_json::Map::new(),
     }
 }
 

@@ -231,6 +231,7 @@ mod tests {
             lights: vec![light],
             palette: None,
             proximity_sensors: Vec::new(),
+            inventory_containers: Vec::new(),
         });
         let rigs = HashMap::from([("owner".into(), &rig)]);
         let result = collect_entity_lights("owner", &rigs, &HashMap::new(), &interiors);
@@ -292,6 +293,7 @@ mod tests {
             lights,
             palette: None,
             proximity_sensors: Vec::new(),
+            inventory_containers: Vec::new(),
         });
         let rigs = HashMap::from([("owner".into(), &rig)]);
         let result = collect_entity_lights("owner", &rigs, &HashMap::new(), &interiors);

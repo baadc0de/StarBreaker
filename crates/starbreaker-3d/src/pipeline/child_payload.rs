@@ -1,7 +1,8 @@
 //! Child entity payload loading and caching helpers.
 //!
 //! Loads child mesh assets for loadout children and inline entity attachments.
-//! `collect_child_payload_specs` gathers attachment specs from a loadout tree;
+//! `collect_child_payload_specs` gathers attachment specs (with item port paths)
+//! from a loadout tree by the rule in `loadout_attachments.rs`;
 //! `load_child_payload_asset` exports a single child CGF; `load_child_payloads`
 //! drives the full parallel load pipeline.
 //! Also defines `LandingGearAsset` (cached landing gear geometry) and the path
@@ -140,6 +141,8 @@ pub(crate) struct ChildPayloadSpec {
     pub(crate) parent_entity_name: String,
     pub(crate) parent_node_name: String,
     pub(crate) no_rotation: bool,
+    /// Item-port names from the root entity to this child (`None` off-loadout).
+    pub(crate) port_path: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -183,30 +186,22 @@ pub(crate) fn collect_child_payload_specs(
     override_attachment: Option<(&str, bool)>,
     out: &mut Vec<ChildPayloadSpec>,
 ) {
-    for child in children {
-        let (attach_name, no_rotation) = match override_attachment {
-            Some((name, parent_no_rot)) => (name.to_string(), child.no_rotation || parent_no_rot),
-            None => (child.attachment_name.clone(), child.no_rotation),
-        };
-
-        let child_creates_nodes = child.has_geometry || child.nmc.is_some();
-        out.push(ChildPayloadSpec {
-            child: child.clone_payload_source(),
-            parent_entity_name: parent_entity_name.to_string(),
-            parent_node_name: attach_name,
-            no_rotation,
-        });
-        if child_creates_nodes {
-            collect_child_payload_specs(&child.children, &child.entity_name, None, out);
-        } else {
-            collect_child_payload_specs(
-                &child.children,
-                parent_entity_name,
-                Some((&child.attachment_name, child.no_rotation)),
-                out,
-            );
-        }
-    }
+    // `children` are the root entity's loadout items: their port paths start empty.
+    super::loadout_attachments::walk_loadout_attachments(
+        children,
+        super::loadout_attachments::WalkOrigin::root(parent_entity_name),
+        override_attachment,
+        Some(&[]),
+        &mut |attachment| {
+            out.push(ChildPayloadSpec {
+                child: attachment.node.clone_payload_source(),
+                parent_entity_name: attachment.parent_entity_name,
+                parent_node_name: attachment.parent_node_name,
+                no_rotation: attachment.no_rotation,
+                port_path: attachment.port_path,
+            })
+        },
+    );
 }
 
 pub(crate) fn empty_child_mesh() -> crate::types::Mesh {
@@ -565,6 +560,7 @@ pub(crate) fn load_child_payloads(
                     offset_rotation: child.offset_rotation,
                     detach_direction: child.detach_direction,
                     port_flags: child.port_flags.clone(),
+                    port_path: spec.port_path.clone(),
                     ui_bindings,
                 })
             } else if child.nmc.is_some() {
@@ -588,6 +584,7 @@ pub(crate) fn load_child_payloads(
                     offset_rotation: child.offset_rotation,
                     detach_direction: child.detach_direction,
                     port_flags: child.port_flags.clone(),
+                    port_path: spec.port_path.clone(),
                     ui_bindings,
                 })
             } else {

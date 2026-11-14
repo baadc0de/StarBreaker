@@ -67,14 +67,14 @@ impl ProximitySensor {
     }
 }
 
-fn field<'v, 'a>(value: &'v Value<'a>, name: &str) -> Option<&'v Value<'a>> {
+pub(crate) fn field<'v, 'a>(value: &'v Value<'a>, name: &str) -> Option<&'v Value<'a>> {
     match value {
         Value::Object { fields, .. } => fields.iter().find(|(k, _)| *k == name).map(|(_, v)| v),
         _ => None,
     }
 }
 
-fn number(value: &Value) -> Option<f32> {
+pub(crate) fn number(value: &Value) -> Option<f32> {
     match value {
         Value::Float(v) => Some(*v),
         Value::Double(v) => Some(*v as f32),
@@ -82,7 +82,7 @@ fn number(value: &Value) -> Option<f32> {
     }
 }
 
-fn vec3(value: &Value) -> Option<[f32; 3]> {
+pub(crate) fn vec3(value: &Value) -> Option<[f32; 3]> {
     Some([
         number(field(value, "x")?)?,
         number(field(value, "y")?)?,
@@ -104,7 +104,7 @@ pub(crate) fn sensor_volume(component: &Value) -> Option<(SensorVolume, Option<f
     Some((volume, field(component, "exitDelay").and_then(number)))
 }
 
-fn class_record<'a>(db: &'a Database, mesh: &InteriorMesh) -> Option<&'a Record> {
+pub(crate) fn class_record<'a>(db: &'a Database, mesh: &InteriorMesh) -> Option<&'a Record> {
     let guid = CigGuid::from_str(mesh.entity_class_guid.as_deref()?).ok()?;
     db.record_by_id(&guid)
 }

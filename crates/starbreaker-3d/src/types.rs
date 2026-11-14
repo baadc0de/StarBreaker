@@ -703,6 +703,10 @@ pub struct ResolvedNode {
     pub entity_name: String,
     /// How this entity attaches to its parent (NMC node name or bone name).
     pub attachment_name: String,
+    /// Item port on the parent this entity occupies (`LoadoutNode.item_port_name`).
+    /// `None` for nodes that are not loadout items (the root, vehicle XML parts,
+    /// synthetic placements).
+    pub item_port_name: Option<String>,
     /// If true, this entity should not inherit its parent's rotation (translation only).
     pub no_rotation: bool,
     /// Item port helper offset position (CryEngine Z-up).
@@ -743,6 +747,7 @@ impl ResolvedNode {
         ResolvedNode {
             entity_name: self.entity_name.clone(),
             attachment_name: self.attachment_name.clone(),
+            item_port_name: self.item_port_name.clone(),
             no_rotation: self.no_rotation,
             offset_position: self.offset_position,
             offset_rotation: self.offset_rotation,
@@ -764,6 +769,7 @@ impl ResolvedNode {
         ResolvedNode {
             entity_name: self.entity_name.clone(),
             attachment_name: self.attachment_name.clone(),
+            item_port_name: self.item_port_name.clone(),
             no_rotation: self.no_rotation,
             offset_position: self.offset_position,
             offset_rotation: self.offset_rotation,
@@ -881,6 +887,9 @@ pub struct EntityPayload {
     pub detach_direction: [f32; 3],
     /// Raw item port flags from SItemPortDef (e.g. "invisible uneditable").
     pub port_flags: String,
+    /// Item-port names from the root entity down to this item (loadout children
+    /// only; `None` for landing gear, vehicle XML parts and interior children).
+    pub port_path: Option<Vec<String>>,
     /// Screen/UI bindings discovered from this entity and any attached UI children.
     pub ui_bindings: Vec<UiBinding>,
 }

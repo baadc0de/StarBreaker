@@ -808,7 +808,7 @@ pub(crate) fn build_paint_display_name_map(
     display_names
 }
 
-fn localization_key_from_value(value: &Value) -> Option<String> {
+pub(crate) fn localization_key_from_value(value: &Value) -> Option<String> {
     let key = match value {
         Value::String(text) | Value::Locale(text) => text.to_string(),
         _ => return None,

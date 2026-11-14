@@ -38,6 +38,9 @@ pub(crate) use self::nmc_bridge::*;
 mod child_payload;
 pub(crate) use self::child_payload::*;
 mod loadout;
+mod loadout_attachments;
+pub(crate) mod inventory_containers;
+pub(crate) mod item_occupancy;
 pub use self::loadout::resolve_loadout_meshes;
 pub(crate) use self::loadout::*;
 mod default_pose;
@@ -623,6 +626,8 @@ where
         paint_variants: Vec::new(),
         animations: Vec::new(),
         physics_grid: None,
+        inventory_containers: Vec::new(),
+        root_item: serde_json::Map::new(),
     };
 
     write_decomposed_export_blend(db, p4k, input, opts, None, None, None, None)
@@ -925,6 +930,7 @@ mod tests {
         crate::types::ResolvedNode {
             entity_name: entity_name.to_string(),
             attachment_name: attachment_name.to_string(),
+            item_port_name: None,
             no_rotation: false,
             offset_position: [0.0; 3],
             offset_rotation: [0.0; 3],

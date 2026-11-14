@@ -273,6 +273,7 @@ pub(crate) fn part_payload(
         offset_rotation: [0.0; 3],
         detach_direction: [0.0; 3],
         port_flags: String::new(),
+        port_path: None,
         ui_bindings: Vec::new(),
     }
 }

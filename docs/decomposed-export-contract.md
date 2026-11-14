@@ -99,7 +99,9 @@ assets (`decomposed_physics.rs`):
   (only the root entity carries animations) and, in character packages,
   `character` (the resolved CHF material customization and HumanSkin_V2
   wrinkle-slot layout; written by `character/package.rs`), and with
-  `include_physics` `physics_grid` (vehicles; see Game physics). `mesh_asset` is
+  `include_physics` `physics_grid` (vehicles; see Game physics), and the item
+  footprint fields of an item root (`inventory_occupancy` …, see
+  [Inventory containers](#inventory-containers)). `mesh_asset` is
   `null` when the root has no geometry (no vertices, no NMC nodes — e.g. a
   socpak scene root, or a character whose head a full helmet hides); the
   `.blend` then has no root mesh object and the package armature sits at the
@@ -108,6 +110,10 @@ assets (`decomposed_physics.rs`):
   `texture_mip`, `include_attachments`, `include_interior`, `include_lights`
 - `children[]`: one scene instance per attached child entity (below)
 - `interiors[]`: interior containers (below)
+- `inventory_containers[]`: the root entity's loadout items that are inventory
+  containers, geometry-less items included (see
+  [Inventory containers](#inventory-containers)); always present, empty for
+  socpak and character packages
 - `assembly_kind` and `weapon_assembly`, only for FPS weapon packages
   (`assembly_kind = "fps_weapon"`)
 - `controls.engine_glow`, only when at least one engine-glow target exists
@@ -123,6 +129,12 @@ Each `children[]` entry (`scene_instance_json`) carries:
 - the attachment relationship: `parent_node_name`, `parent_entity_name`,
   `offset_position`, `offset_rotation`, `no_rotation`, `detach_direction`
   (the port's detach direction in port-local source axes), and `port_flags`
+- `port_path`: the item-port names (`LoadoutNode.item_port_name`, as authored)
+  from the root entity down to this item, e.g. `["hardpoint_cargoplate_bot_left"]`
+  or, nested, `["hardpoint_x", "port_y"]`. It identifies an item among siblings
+  that share an `entity_name` (several identical plates). `null` for children
+  that are not loadout items (landing gear, vehicle XML parts, animated socpak
+  entities); consumers of older manifests must accept an absent field
 - the exporter-resolved transform: `source_transform_basis`,
   `local_transform_sc`, `resolved_no_rotation` (see
   [Transform Fields](#transform-fields))
@@ -176,6 +188,16 @@ frame. The `.soc` `Radius` of these entities equals `|extent|`, consistent
 with a box spanning `offset ± extent`; the half-size reading is inferred from
 that, not documented by the data. Other shape types are not exported (logged).
 
+`inventory_containers[]` lists the container's `.soc` entities whose class has
+`SCItemInventoryContainerComponentParams` (recognised by that component, with
+or without geometry; e.g. a hangar freight-elevator cargo grid, an item bank):
+`entity_id`, `entity_class` (short record name), `entity_class_guid`,
+`transform` (4×4 column-major, container-local: the frame of `placements[]`;
+compose with the entry's `container_transform`), `links[]` (the entity's own
+`EntityLinks` targets) and `container` (see
+[Inventory containers](#inventory-containers)). Ids are unique within one
+`interiors[]` entry only (a module instanced twice repeats them).
+
 A door's interactions therefore join as: its placement `entity_id` ←
 a panel placement's `links[]`, ← a panel placement's
 `loadout_owner_entity_id`, ← a sensor's `links[]`.
@@ -192,6 +214,91 @@ to the area it sits in; the volumes let a consumer make that decision. The
 array is empty when the container registers no rooms. A point on a shared
 edge or vertex of a `trimesh` must be counted once: `RoomVolume::contains`
 (`socpak/room_containment.rs`) casts +Z and breaks edge ties symbolically.
+
+### Inventory containers
+
+Additive (scene version stays `2`; `pipeline/inventory_containers.rs`,
+`pipeline/item_occupancy.rs`, `pipeline/loadout_attachments.rs`). An entity is
+an inventory container when its class has
+`Components[SCItemInventoryContainerComponentParams]`; nothing is decided by
+class, port or record name.
+
+**Vehicle** `inventory_containers[]` (top level): one entry per node of the
+root entity's loadout whose class has the component, in loadout order,
+including items without geometry (which have no `children[]` entry):
+
+- `entity_name`, `entity_class_guid` (the item's `EntityClassDefinition`)
+- `port_path`: as `children[].port_path`
+- `parent_port_path`: the `port_path` of the scene entity whose geometry holds
+  `parent_node_name` — `[]` for the root entity, else the `children[]` entry
+  with that `port_path`. An item whose loadout parent creates no scene nodes
+  hangs under that parent's own parent (the `children[]` reparenting rule), so
+  this is the nearest node-creating ancestor, not necessarily the loadout parent.
+- `parent_entity_name`, `parent_node_name`: the attachment, resolved exactly as
+  for `children[]` (`SItemPortDef` helper/bone of the parent's port, else the
+  port name). Joining by name alone is ambiguous when siblings share an
+  `entity_name`; join by `parent_port_path`.
+- `source_transform_basis` (`"gltf_y_up"`), `local_transform_sc`,
+  `resolved_no_rotation`: the local transform relative to that helper, by the
+  `children[]` rule ([Transform Fields](#transform-fields)); raw
+  `offset_position`, `offset_rotation`, `no_rotation`, `port_flags` as authored
+- `container` (below)
+
+A container that follows an animated helper (a deploying cargo plate's
+`hardpoint_cargo_grid` bone) moves with that helper: the transform is local to
+it, not a baked world pose.
+
+**Interior** `interiors[].inventory_containers[]`: see
+[Interior containers](#interior-containers).
+
+**`container`** — the `InventoryContainer` that `containerParams` names:
+
+- `record`, `record_guid`: the short record name and GUID (`null` when the
+  container is authored inline, not as a record reference)
+- `interior_dimensions` `[x, y, z]` (metres, `interiorDimensions`)
+- `inventory_type`: the concrete `inventoryType` struct type, e.g.
+  `InventoryOpenContainerType` (a grid) or `InventoryClosedContainerType`
+  (a capacity)
+- `grid_cell_size`: metres, converted only from a unit field whose name is its
+  unit (`centimeters` / `meters`), else `null`; `grid_cell_size_authored` keeps
+  the authored object (`{"__type": "InventoryContainerGridCellSizeCentimeters",
+  "centimeters": 1}`)
+- `grid_pos_offset`, `min_permitted_item_size`, `max_permitted_item_size`
+  (`[x, y, z]`), `is_external_container`, `override_storable_item_types`,
+  `capacity` (verbatim, e.g. `{"__type": "SStandardCargoUnit",
+  "standardCargoUnits": 8}`): from `inventoryType`, `null` when that type does
+  not author them
+- `excluded_item_sub_types`: verbatim
+- `authored`: the whole record verbatim (every field, including ones without a
+  normalised name)
+
+Values are as authored: zeros stay zeros (e.g. a zero `maxPermittedItemSize`
+is reported, not interpreted). Verbatim objects carry their struct type in
+`__type` (and a materialised reference its `__record_id`), the `dcb query`
+convention. The grid's origin and axes relative to its transform (corner or
+centre; the role of `grid_pos_offset`) are not established by the data alone;
+they are recorded here once verified visually.
+
+**Root item footprint** (`root_entity`, when the root's
+`SAttachableComponentParams.AttachDef` authors inventory occupancy — every
+`SItemDefinition` does, a vehicle included, so a non-cargo root reports its
+authored default):
+
+- `inventory_occupancy`: `dimensions` (`inventoryOccupancyDimensions`, metres),
+  `volume` and `volume_unit` (the single amount field of
+  `inventoryOccupancyVolume` and its struct type, e.g. `16` /
+  `"SStandardCargoUnit"`), `local_bounds_min` / `local_bounds_max`
+  (`inventoryOccupancyLocalBounds*`, the item's frame)
+- `standard_cargo_units`: `inventoryOccupancyVolume.standardCargoUnits`
+  when the volume is authored in that unit, else `null` (no unit conversion)
+- `mass`: `SEntityPhysicsControllerParams.PhysType.Mass`, raw
+- `item_type`, `item_sub_type`, `item_size`: `AttachDef.Type` / `SubType` / `Size`
+- `display_name_key` (`AttachDef.Localization.Name`) and `display_name` (its
+  `global.ini` English text, `null` when unresolved)
+- `cargo_grid_occupant`: `StaticEntityClassData[CargoGridOccupantProperties]`
+  verbatim (per-face `faceUpwardAllowed` / `stackingSupport`), `null` when absent
+- `inventory_container`: the root's own `container` when the root itself is an
+  inventory container (e.g. an inventory box)
 
 ### Engine-glow controls
 
