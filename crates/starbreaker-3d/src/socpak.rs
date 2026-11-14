@@ -1667,8 +1667,12 @@ fn parse_light_entities(
 
     if entity_class == "LightGroup" || has_light_group_component(xml, entity) {
         // LightGroup: EntityComponentLightGroup > BakedInLights > Light[]
-        // Each Light child has its own EntityComponentLight
-        return parse_light_group(xml, entity, &base_name, &base_pos, &base_rot, &base_scale);
+        // Each Light child has its own EntityComponentLight. A group attached
+        // to another entity places its lights in the attachment target's
+        // frame (see `attachment_target_frame`).
+        let (group_pos, group_rot, group_scale) =
+            attachment_target_frame(attrs, &base_pos, &base_rot, &base_scale);
+        return parse_light_group(xml, entity, &base_name, &group_pos, &group_rot, &group_scale);
     }
 
     // Single Light: PropertiesDataCore > EntityComponentLight
@@ -1720,6 +1724,69 @@ fn find_entity_component_light<'a>(
         }
     }
     None
+}
+
+/// The frame a light group's baked lights (`RelativeXForm`) are authored in.
+///
+/// A group attached to another entity (`ParentEntityCryGUID` with
+/// `ParentOffsetPos` / `ParentOffsetRot` / `ParentOffsetScale`, e.g. to a
+/// platform bone through `AttachmentType="CharacterBone"`) is a pivot on that
+/// target: its `Pos`/`Rotate` equal the target's frame composed with the
+/// offset, and its lights are relative to the target itself. The target frame
+/// is recovered as `group ∘ offset⁻¹`. Evidence (LIVE 4.10.2): composing with
+/// the group puts the freight-elevator lights of
+/// `elev_ht_cargo_hangar_lrg_a` under the platform and outside the shaft
+/// walls, and the ship-elevator lights of `hangar_lrgtop_001` 64 m above
+/// their platform; composing with the target puts both on their platforms.
+/// A free-standing group is its own frame.
+fn attachment_target_frame(
+    attrs: &HashMap<&str, &str>,
+    pos: &[f64; 3],
+    rot: &[f64; 4],
+    scale: &[f64; 3],
+) -> ([f64; 3], [f64; 4], [f64; 3]) {
+    let attached = attrs
+        .get("ParentEntityCryGUID")
+        .is_some_and(|guid| is_nonzero_guid(guid));
+    let Some(offset_pos) = attrs.get("ParentOffsetPos").filter(|_| attached) else {
+        return (*pos, *rot, *scale);
+    };
+    let offset_pos = parse_csv_f64(offset_pos);
+    let offset_rot = parse_csv_f64(attrs.get("ParentOffsetRot").copied().unwrap_or("1,0,0,0"));
+    let offset_scale = attrs
+        .get("ParentOffsetScale")
+        .map(|s| parse_csv_f64(s))
+        .unwrap_or_default();
+    let (Ok(offset_pos), Ok(offset_rot)) = (
+        <[f64; 3]>::try_from(offset_pos.as_slice()),
+        <[f64; 4]>::try_from(offset_rot.as_slice()),
+    ) else {
+        log::warn!("light group with an unparsable parent offset; lights stay relative to the group");
+        return (*pos, *rot, *scale);
+    };
+    // A uniform scale is authored as one value; per-axis as three.
+    let offset_scale = match offset_scale.as_slice() {
+        [s] => [*s; 3],
+        [x, y, z] => [*x, *y, *z],
+        _ => [1.0; 3],
+    };
+    let group = glam::DAffine3::from_scale_rotation_translation(
+        glam::DVec3::from(*scale),
+        glam::DQuat::from_xyzw(rot[1], rot[2], rot[3], rot[0]).normalize(),
+        glam::DVec3::from(*pos),
+    );
+    let offset = glam::DAffine3::from_scale_rotation_translation(
+        glam::DVec3::from(offset_scale),
+        glam::DQuat::from_xyzw(offset_rot[1], offset_rot[2], offset_rot[3], offset_rot[0]).normalize(),
+        glam::DVec3::from(offset_pos),
+    );
+    let (target_scale, target_rot, target_pos) =
+        (group * offset.inverse()).to_scale_rotation_translation();
+    (
+        target_pos.to_array(),
+        [target_rot.w, target_rot.x, target_rot.y, target_rot.z],
+        target_scale.to_array(),
+    )
 }
 
 /// Parse a LightGroup entity with baked-in lights.
@@ -1849,6 +1916,39 @@ mod light_regressions {
         let bytes = crate::test_xml::encode(r#"<Entities><Entity EntityClass="LightGroup" Name="synthetic"><EntityComponentLightGroup><BakedInLights/></EntityComponentLightGroup></Entity></Entities>"#);
         let xml = starbreaker_cryxml::from_bytes(&bytes).unwrap();
         assert!(super::extract_cryxml_entities(&xml).1.is_empty());
+    }
+
+    /// A light group attached to another entity (`ParentEntityCryGUID`, e.g. a
+    /// freight elevator platform's bone) keeps its baked lights' `RelativeXForm`
+    /// in the attachment target's frame: the group's own `Pos`/`Rotate` are
+    /// that target composed with `ParentOffsetPos`/`ParentOffsetRot`, which
+    /// the lights do not take again. Synthetic values: the target stands at
+    /// (10, 2, 0) unrotated, the group a half turn about (-1, 1, 0) away from
+    /// it; the light sits at (-6, -5, 7) in the target frame, pointing down.
+    #[test]
+    fn attached_light_group_lights_are_relative_to_the_attachment_target() {
+        let bytes = crate::test_xml::encode(r#"<Entities><Entity EntityClass="LightGroupObjectAttach" Name="attached" ParentEntityCryGUID="00000000-0000-0000-0000-000000000001" AttachmentType="CharacterBone" AttachmentTarget="bone" ParentOffsetPos="-3,-4,5" ParentOffsetRot="0,-0.70710678,0.70710678,0" ParentOffsetScale="1" Pos="7,-2,5" Rotate="0,-0.70710678,0.70710678,0"><EntityComponentLightGroup><BakedInLights><Light><EntityComponentLight lightType="Projector"><defaultState intensity="1"/><sizeParams lightRadius="5"/></EntityComponentLight><RelativeXForm rotation="0.70710678,0,0.70710678,0" translation="-6,-5,7"/></Light></BakedInLights></EntityComponentLightGroup></Entity></Entities>"#);
+        let xml = starbreaker_cryxml::from_bytes(&bytes).unwrap();
+        let lights = super::extract_cryxml_entities(&xml).1;
+        assert_eq!(lights.len(), 1);
+        for (axis, (got, want)) in lights[0].position.iter().zip([4.0, -3.0, 7.0]).enumerate() {
+            assert!((got - want).abs() < 1e-6, "axis {axis}: {got} != {want}");
+        }
+        // The group's half turn is not applied to the light again: still pointing down.
+        assert!(lights[0].direction_sc[2] < -0.999, "direction {:?}", lights[0].direction_sc);
+    }
+
+    /// A free-standing group (no attachment) keeps composing its lights with
+    /// its own `Pos`/`Rotate`.
+    #[test]
+    fn free_light_group_lights_are_relative_to_the_group() {
+        let bytes = crate::test_xml::encode(r#"<Entities><Entity EntityClass="LightGroup" Name="free" Pos="1,2,3" Rotate="0.70710678,0,0,0.70710678"><EntityComponentLightGroup><BakedInLights><Light><EntityComponentLight lightType="Omni"><defaultState intensity="1"/><sizeParams lightRadius="5"/></EntityComponentLight><RelativeXForm rotation="1,0,0,0" translation="1,0,0"/></Light></BakedInLights></EntityComponentLightGroup></Entity></Entities>"#);
+        let xml = starbreaker_cryxml::from_bytes(&bytes).unwrap();
+        let lights = super::extract_cryxml_entities(&xml).1;
+        assert_eq!(lights.len(), 1);
+        for (axis, (got, want)) in lights[0].position.iter().zip([1.0, 3.0, 3.0]).enumerate() {
+            assert!((got - want).abs() < 1e-6, "axis {axis}: {got} != {want}");
+        }
     }
 
     #[test]

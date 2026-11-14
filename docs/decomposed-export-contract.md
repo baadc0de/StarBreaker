@@ -419,6 +419,14 @@ frame for some containers and container-local for others, so it is not used
 for placement. This applies to the containers listed directly on an entity's
 `VehicleComponentParams.objectContainers`; groups in nested child containers
 and in containers of loadout children keep their `.soc` placement.
+A group attached to another `.soc` entity (`ParentEntityCryGUID` with
+`ParentOffsetPos` / `ParentOffsetRot` / `ParentOffsetScale`, e.g. to a
+freight-elevator platform's bone, `AttachmentType="CharacterBone"`) is a pivot
+on that target: its lights' baked `RelativeXForm` are relative to the target
+frame, recovered as the group's `.soc` transform composed with the inverse
+offset, not to the group itself (`socpak.rs` `attachment_target_frame`). The
+exported transforms are the target's rest pose; a consumer that animates the
+target (the helper in `attachment.helper`) moves the lights with it.
 A helper-parented container's `container_transform` is relative to that
 helper (`parent_node_name` of `parent_entity_name`); the bundled GLB hangs
 the container node under the helper node, or under the owner entity node
