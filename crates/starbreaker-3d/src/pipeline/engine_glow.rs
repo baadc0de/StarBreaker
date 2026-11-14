@@ -1,6 +1,7 @@
 //! Bind authored node-level Glow effects only to glow-capable material sections.
 //! Preserve effect identity and ordered modifier chains; derive control bounds in
 //! material-property units rather than inventing an emission-strength range.
+//! Modifiers: multiplier, min/max clamp and value override; any other type fails.
 use crate::{
     error::Error,
     mtl::{MtlFile, ShaderFamily, SubMaterial},
@@ -16,6 +17,8 @@ use std::collections::HashMap;
 pub(crate) enum GlowModifier {
     Multiplier { multiplier: f32 },
     MinMax { minimum: f32, maximum: f32 },
+    /// `SEntityEffectSystem_OverrideValueModifier`: the value becomes `overrideValue`.
+    OverrideValue { override_value: f32 },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -135,6 +138,12 @@ fn modifiers(link: &Value) -> Result<Vec<GlowModifier>, Error> {
                 }
                 Ok(GlowModifier::MinMax { minimum, maximum })
             }
+            Value::Object {
+                type_name: "SEntityEffectSystem_OverrideValueModifier",
+                ..
+            } => Ok(GlowModifier::OverrideValue {
+                override_value: number(modifier, "overrideValue")?,
+            }),
             _ => Err(Error::Other(format!(
                 "unsupported Glow modifier: {modifier:?}"
             ))),
@@ -165,6 +174,11 @@ fn summarize(modifiers: &[GlowModifier]) -> (Option<f32>, Option<f32>, Option<f3
             } => {
                 minimum = Some(minimum.map_or(lo, |v: f32| v.clamp(lo, hi)));
                 maximum = Some(maximum.map_or(hi, |v: f32| v.clamp(lo, hi)));
+            }
+            // The output no longer depends on the input: both bounds are the value.
+            GlowModifier::OverrideValue { override_value } => {
+                minimum = Some(override_value);
+                maximum = Some(override_value);
             }
         }
     }
@@ -457,6 +471,49 @@ mod tests {
             assert_eq!(glow_capable(&material.materials[0]), expected);
         }
     }
+    #[test]
+    fn override_value_modifier_sets_the_value_and_later_modifiers_apply_to_it() {
+        // Synthetic chain shaped like an authored one: override, then a clamp.
+        let link = object(
+            "Synthetic",
+            vec![(
+                "modifiers",
+                Value::Array(vec![
+                    object("SEntityEffectSystem_MultiplierModifier", vec![("multiplier", Value::Float(4.0))]),
+                    object("SEntityEffectSystem_OverrideValueModifier", vec![("overrideValue", Value::Float(7.0))]),
+                    object(
+                        "SEntityEffectSystem_MinMaxModifier",
+                        vec![("minimum", Value::Float(2.0)), ("maximum", Value::Float(9.0))],
+                    ),
+                ]),
+            )],
+        );
+        let chain = modifiers(&link).unwrap();
+        assert_eq!(chain[1], GlowModifier::OverrideValue { override_value: 7.0 });
+        // The output is the override (inside the clamp) whatever the input; the
+        // multiplier summary stays the product of authored multipliers.
+        assert_eq!(summarize(&chain), (Some(4.0), Some(7.0), Some(7.0)));
+        let clamped = [
+            GlowModifier::OverrideValue { override_value: 50.0 },
+            GlowModifier::MinMax { minimum: 60.0, maximum: 90.0 },
+        ];
+        assert_eq!(summarize(&clamped), (None, Some(60.0), Some(60.0)));
+        let scaled = [
+            GlowModifier::OverrideValue { override_value: 3.0 },
+            GlowModifier::Multiplier { multiplier: -2.0 },
+        ];
+        assert_eq!(summarize(&scaled), (Some(-2.0), Some(-6.0), Some(-6.0)));
+        assert_eq!(
+            serde_json::to_value(&chain[1]).unwrap(),
+            serde_json::json!({"kind": "override_value", "override_value": 7.0})
+        );
+        let malformed = object(
+            "Synthetic",
+            vec![("modifiers", Value::Array(vec![object("SEntityEffectSystem_OverrideValueModifier", vec![])]))],
+        );
+        assert!(modifiers(&malformed).is_err());
+    }
+
     #[test]
     fn unknown_or_malformed_modifiers_fail_instead_of_inventing_a_range() {
         let link = object(

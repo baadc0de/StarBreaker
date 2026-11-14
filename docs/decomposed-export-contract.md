@@ -346,13 +346,19 @@ importers:
 - each target has `property_links[]`, preserving `effect_kind` (`tagEffects` or
   `triggerEffects`), `effect_index`, `property_link_index`, `submesh_name`,
   `parameter_record_id`, `tag_record_id`, and the ordered `modifiers[]` chain.
-  A modifier is `{kind:"multiplier", multiplier:...}` or
-  `{kind:"min_max", minimum:..., maximum:...}`. Unknown or malformed modifier
-  types fail export instead of silently producing a fabricated range
+  A modifier is `{kind:"multiplier", multiplier:...}`,
+  `{kind:"min_max", minimum:..., maximum:...}` or
+  `{kind:"override_value", override_value:...}`
+  (`SEntityEffectSystem_OverrideValueModifier`: the value becomes
+  `overrideValue` whatever the input, so both bounds become it and later
+  modifiers apply to it). Unknown or malformed modifier types fail export
+  instead of silently producing a fabricated range
 - per-target `multiplier[]`, `minimum[]`, and `maximum[]` are parallel arrays
   aligned with `property_links[]`, so several tag effects retain separate values
   on one material target. The same summary fields occur on each link.
-  `multiplier` is the product of its authored multipliers (null if none);
+  `multiplier` is the product of its authored multipliers (null if none; an
+  override in the chain makes the output independent of the input, which the
+  bounds show and the multiplier does not);
   `minimum` / `maximum` are output bounds after applying the ordered chain,
   with null for an unbounded/unauthored bound. The full chain remains authoritative
   when a clamp precedes a multiplier. Multipliers are dimensionless;
