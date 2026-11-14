@@ -4,6 +4,7 @@ use clap::{Subcommand, ValueEnum};
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use starbreaker_datacore::database::Database;
+use starbreaker_datacore::query::record_json::value_to_json;
 use starbreaker_datacore::query::value::Value;
 
 use crate::common::{load_dcb, load_dcb_bytes, matches_filter};
@@ -291,34 +292,4 @@ fn query(
     }
 
     Ok(())
-}
-
-fn value_to_json(value: &Value) -> serde_json::Value {
-    match value {
-        Value::Null => serde_json::Value::Null,
-        Value::Bool(b) => serde_json::Value::Bool(*b),
-        Value::Int8(n) => serde_json::json!(n),
-        Value::Int16(n) => serde_json::json!(n),
-        Value::Int32(n) => serde_json::json!(n),
-        Value::Int64(n) => serde_json::json!(n),
-        Value::UInt8(n) => serde_json::json!(n),
-        Value::UInt16(n) => serde_json::json!(n),
-        Value::UInt32(n) => serde_json::json!(n),
-        Value::UInt64(n) => serde_json::json!(n),
-        Value::Float(n) => serde_json::json!(n),
-        Value::Double(n) => serde_json::json!(n),
-        Value::String(s) => serde_json::Value::String(s.to_string()),
-        Value::Guid(g) => serde_json::Value::String(format!("{g:?}")),
-        Value::Enum(s) => serde_json::Value::String(s.to_string()),
-        Value::Locale(s) => serde_json::Value::String(s.to_string()),
-        Value::Array(arr) => serde_json::Value::Array(arr.iter().map(value_to_json).collect()),
-        Value::Object { type_name, fields, .. } => {
-            let mut map = serde_json::Map::new();
-            map.insert("__type".to_string(), serde_json::Value::String(type_name.to_string()));
-            for (k, v) in fields {
-                map.insert(k.to_string(), value_to_json(v));
-            }
-            serde_json::Value::Object(map)
-        }
-    }
 }
