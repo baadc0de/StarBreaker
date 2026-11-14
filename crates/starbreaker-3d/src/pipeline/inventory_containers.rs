@@ -16,7 +16,7 @@
 //!   (`interiors[].inventory_containers[]`).
 //! - [`value_json`]: a DataCore `Value` as JSON, with `__type` on objects.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use starbreaker_common::CigGuid;
 use starbreaker_datacore::database::Database;
@@ -24,7 +24,7 @@ use starbreaker_datacore::query::value::Value;
 use starbreaker_datacore::types::Record;
 
 use super::interior_entities::{class_record, field, vec3};
-use super::loadout_attachments::{WalkOrigin, walk_loadout_attachments};
+use super::loadout_attachments::{WalkOrigin, creates_scene_nodes, walk_loadout_attachments};
 use crate::types::{InteriorMesh, ResolvedNode};
 
 const CONTAINER_COMPONENT_PATH: &str = "Components[SCItemInventoryContainerComponentParams]";
@@ -226,14 +226,24 @@ impl VehicleInventoryContainer {
 
 /// Every node of the root entity's loadout `children` whose class is an
 /// inventory container, in loadout order, with its scene attachment.
+/// `emitted` are the `port_path`s of the scene children actually exported: a
+/// container's parent is the nearest of those (or the root), so it never names
+/// a child whose payload failed to load.
 pub(crate) fn collect_vehicle_containers(
     db: &Database,
     children: &[ResolvedNode],
     root_entity_name: &str,
+    emitted: &HashSet<Vec<String>>,
 ) -> Vec<VehicleInventoryContainer> {
     let mut resolver = ContainerResolver::new(db);
     let mut out = Vec::new();
-    walk_loadout_attachments(children, WalkOrigin::root(root_entity_name), None, Some(&[]), &mut |attachment| {
+    let is_instance = |node: &ResolvedNode, port_path: Option<&[String]>| match port_path {
+        Some(path) => emitted.contains(path),
+        // Off-loadout nodes carry no port path to match: the pre-load rule.
+        None => creates_scene_nodes(node, None),
+    };
+    let origin = WalkOrigin::root(root_entity_name);
+    walk_loadout_attachments(children, origin, None, Some(&[]), &is_instance, &mut |attachment| {
         let node = attachment.node;
         let Some(container) = resolver.container(&node.record) else { return };
         out.push(VehicleInventoryContainer {

@@ -128,7 +128,11 @@ Each `children[]` entry (`scene_instance_json`) carries:
 - `item_type`: authored `SAttachableComponentParams.AttachDef.Type`, or null when absent. Consumers of older manifests must also accept an absent field; do not infer categories from entity names.
 - the attachment relationship: `parent_node_name`, `parent_entity_name`,
   `offset_position`, `offset_rotation`, `no_rotation`, `detach_direction`
-  (the port's detach direction in port-local source axes), and `port_flags`
+  (the port's detach direction in port-local source axes), and `port_flags`.
+  A child below a chain of loadout ancestors that create no scene nodes (no
+  geometry, no NMC) hangs on the nearest node-creating ancestor, at the
+  attachment the outermost of the chain resolved to there (`no_rotation`
+  accumulating along the chain)
 - `port_path`: the item-port names (`LoadoutNode.item_port_name`, as authored)
   from the root entity down to this item, e.g. `["hardpoint_cargoplate_bot_left"]`
   or, nested, `["hardpoint_x", "port_y"]`. It identifies an item among siblings
@@ -217,7 +221,11 @@ edge or vertex of a `trimesh` must be counted once: `RoomVolume::contains`
 
 ### Inventory containers
 
-Additive (scene version stays `2`; `pipeline/inventory_containers.rs`,
+Additive: the scene version stays `2` (readers reject unknown versions), so a
+consumer detects support by the presence of the top-level
+`inventory_containers` key (always written by exporters that support it, empty
+when there are none); a v2 package without it predates this contract and must
+be re-exported for container data (`pipeline/inventory_containers.rs`,
 `pipeline/item_occupancy.rs`, `pipeline/loadout_attachments.rs`). An entity is
 an inventory container when its class has
 `Components[SCItemInventoryContainerComponentParams]`; nothing is decided by
@@ -231,13 +239,18 @@ including items without geometry (which have no `children[]` entry):
 - `port_path`: as `children[].port_path`
 - `parent_port_path`: the `port_path` of the scene entity whose geometry holds
   `parent_node_name` — `[]` for the root entity, else the `children[]` entry
-  with that `port_path`. An item whose loadout parent creates no scene nodes
-  hangs under that parent's own parent (the `children[]` reparenting rule), so
-  this is the nearest node-creating ancestor, not necessarily the loadout parent.
+  with that `port_path`. It always names an entry that was emitted: the
+  nearest loadout ancestor that is a scene instance. An ancestor that is not
+  (no geometry and no NMC, or a payload that failed to load) passes on the
+  attachment it resolved to, through any chain of such ancestors, with
+  `no_rotation` accumulating (the `children[]` reparenting rule).
 - `parent_entity_name`, `parent_node_name`: the attachment, resolved exactly as
   for `children[]` (`SItemPortDef` helper/bone of the parent's port, else the
   port name). Joining by name alone is ambiguous when siblings share an
-  `entity_name`; join by `parent_port_path`.
+  `entity_name`; join by `parent_port_path` and find `parent_node_name` inside
+  that instance. The exporter resolves helpers the same way: a `no_rotation`
+  item's matrix (children and containers alike) uses the world matrix of the
+  helper in its own parent instance, found by `port_path`.
 - `source_transform_basis` (`"gltf_y_up"`), `local_transform_sc`,
   `resolved_no_rotation`: the local transform relative to that helper, by the
   `children[]` rule ([Transform Fields](#transform-fields)); raw

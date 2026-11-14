@@ -59,7 +59,25 @@ fn vehicle_cargo_grids_are_exported_with_distinct_port_paths() {
     for container in containers {
         assert_eq!(container["container"]["interior_dimensions"], serde_json::json!([2.5, 5.0, 2.5]));
         assert_eq!(container["container"]["inventory_type"], "InventoryOpenContainerType");
-        assert!(container["local_transform_sc"].is_array());
+        // The local transform is the port offset on the helper (the children[]
+        // rule for an item without `no_rotation`): a column-major matrix whose
+        // translation is `offset_position` and, with no offset rotation, whose
+        // basis is the identity.
+        let matrix: Vec<Vec<f64>> = serde_json::from_value(container["local_transform_sc"].clone()).unwrap();
+        let offset: Vec<f64> = serde_json::from_value(container["offset_position"].clone()).unwrap();
+        let rotation: Vec<f64> = serde_json::from_value(container["offset_rotation"].clone()).unwrap();
+        assert_eq!(container["no_rotation"], false);
+        assert_eq!(rotation, [0.0, 0.0, 0.0]);
+        for (axis, column) in matrix.iter().take(3).enumerate() {
+            for (row, value) in column.iter().enumerate() {
+                let identity = if row == axis { 1.0 } else { 0.0 };
+                assert!((value - identity).abs() < 1e-6, "basis {matrix:?}");
+            }
+        }
+        for row in 0..3 {
+            assert!((matrix[3][row] - offset[row]).abs() < 1e-6, "translation {matrix:?} vs {offset:?}");
+        }
+        assert_eq!(matrix[3][3], 1.0);
         // The parent port path names a scene child: the plate the grid hangs on.
         let parent = scene["children"]
             .as_array()

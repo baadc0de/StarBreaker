@@ -4,10 +4,13 @@
 //! [`walk_loadout_attachments`] visits each node of a `ResolvedNode` tree with
 //! the scene attachment it resolves to ([`LoadoutAttachment`]): the parent
 //! entity and helper/bone it hangs under, the `no_rotation` rule, and its item
-//! port path from the root entity. A node that creates no scene nodes (no
-//! geometry, no NMC) passes its own attachment on to its children, which then
-//! hang under its parent. `collect_child_payload_specs` (scene children) and
-//! the inventory-container walk use it, so both resolve the same parents.
+//! port path from the root entity. A node that is no scene instance passes the
+//! attachment it resolved to on to its children, which then hang where it
+//! would have (through any chain of such nodes, `no_rotation` accumulating).
+//! Which nodes are scene instances is the caller's [`SceneInstances`] rule:
+//! [`creates_scene_nodes`] before loading (`collect_child_payload_specs`),
+//! or the port paths actually emitted (the inventory-container walk, so a
+//! child whose geometry failed to load is not named as a parent).
 
 use crate::types::ResolvedNode;
 
@@ -41,6 +44,14 @@ impl<'a> WalkOrigin<'a> {
     }
 }
 
+/// Whether a loadout node (with its port path) is a scene instance.
+pub(crate) type SceneInstances<'a> = dyn Fn(&ResolvedNode, Option<&[String]>) -> bool + 'a;
+
+/// The pre-load rule: a node with geometry or an NMC creates scene nodes.
+pub(crate) fn creates_scene_nodes(node: &ResolvedNode, _port_path: Option<&[String]>) -> bool {
+    node.has_geometry || node.nmc.is_some()
+}
+
 fn extend_path(prefix: Option<&[String]>, port: Option<&String>) -> Option<Vec<String>> {
     let mut path = prefix?.to_vec();
     path.push(port?.clone());
@@ -49,12 +60,14 @@ fn extend_path(prefix: Option<&[String]>, port: Option<&String>) -> Option<Vec<S
 
 /// Visit every node of `children` (depth first, parents before children) with
 /// its resolved attachment. `override_attachment` is the attachment a
-/// node-less parent passes on (`collect_child_payload_specs`' contract).
+/// node-less parent passes on (`collect_child_payload_specs`' contract);
+/// `is_instance` decides which nodes are scene instances.
 pub(crate) fn walk_loadout_attachments<'n>(
     children: &'n [ResolvedNode],
     origin: WalkOrigin<'_>,
     override_attachment: Option<(&str, bool)>,
     node_path_prefix: Option<&[String]>,
+    is_instance: &SceneInstances<'_>,
     visit: &mut dyn FnMut(LoadoutAttachment<'n>),
 ) {
     for child in children {
@@ -66,26 +79,28 @@ pub(crate) fn walk_loadout_attachments<'n>(
         visit(LoadoutAttachment {
             node: child,
             parent_entity_name: origin.parent_entity_name.to_string(),
-            parent_node_name: attach_name,
+            parent_node_name: attach_name.clone(),
             no_rotation,
             port_path: port_path.clone(),
             parent_port_path: origin.parent_port_path.map(<[String]>::to_vec),
         });
-        let child_creates_nodes = child.has_geometry || child.nmc.is_some();
-        if child_creates_nodes {
+        if is_instance(child, port_path.as_deref()) {
             walk_loadout_attachments(
                 &child.children,
                 WalkOrigin { parent_entity_name: &child.entity_name, parent_port_path: port_path.as_deref() },
                 None,
                 port_path.as_deref(),
+                is_instance,
                 visit,
             );
         } else {
+            // Not a scene instance: its children hang where it resolved to.
             walk_loadout_attachments(
                 &child.children,
                 origin,
-                Some((&child.attachment_name, child.no_rotation)),
+                Some((&attach_name, no_rotation)),
                 port_path.as_deref(),
+                is_instance,
                 visit,
             );
         }
@@ -129,15 +144,22 @@ mod tests {
         }
     }
 
-    fn walk(children: &[ResolvedNode]) -> Vec<(String, String, String, Option<Vec<String>>, Option<Vec<String>>)> {
+    type Visits = Vec<(String, String, String, Option<Vec<String>>, Option<Vec<String>>, bool)>;
+
+    fn walk(children: &[ResolvedNode]) -> Visits {
+        walk_with(children, &creates_scene_nodes)
+    }
+
+    fn walk_with(children: &[ResolvedNode], is_instance: &SceneInstances<'_>) -> Visits {
         let mut out = Vec::new();
-        walk_loadout_attachments(children, WalkOrigin::root("root"), None, Some(&[]), &mut |a| {
+        walk_loadout_attachments(children, WalkOrigin::root("root"), None, Some(&[]), is_instance, &mut |a| {
             out.push((
                 a.node.entity_name.clone(),
                 a.parent_entity_name,
                 a.parent_node_name,
                 a.port_path,
                 a.parent_port_path,
+                a.no_rotation,
             ))
         });
         out
@@ -177,6 +199,39 @@ mod tests {
         assert_eq!(visits[1].2, "hardpoint_proxy");
         assert_eq!(visits[1].3, path(&["port_proxy", "port_item"]));
         assert_eq!(visits[1].4, path(&[]), "it hangs under the root entity's helper");
+    }
+
+    #[test]
+    fn a_chain_of_nodeless_ancestors_composes_its_attachment() {
+        // root -> A (node-less, no_rotation) -> B (node-less) -> grid
+        let mut a = node("A", Some("port_a"), "helper_a_on_root", false, vec![node(
+            "B", Some("port_b"), "helper_b_on_a", false, vec![node(
+                "grid", Some("port_grid"), "helper_grid_on_b", false, Vec::new(),
+            )],
+        )]);
+        a.no_rotation = true;
+        let visits = walk(&[a]);
+        let grid = &visits[2];
+        assert_eq!(grid.0, "grid");
+        assert_eq!(grid.1, "root");
+        assert_eq!(grid.2, "helper_a_on_root", "B has no scene nodes, so its own helper does not exist");
+        assert!(grid.5, "the no_rotation of A survives the chain");
+        assert_eq!(grid.3, path(&["port_a", "port_b", "port_grid"]));
+        assert_eq!(grid.4, path(&[]));
+    }
+
+    #[test]
+    fn a_node_that_was_not_emitted_is_not_named_as_a_parent() {
+        // The plate has geometry, but its payload failed to load: only the
+        // emitted port paths are scene instances.
+        let plate = node("Plate", Some("port_plate"), "helper_plate", true, vec![node(
+            "Grid", Some("port_grid"), "helper_grid", false, Vec::new(),
+        )]);
+        let emitted: Vec<Vec<String>> = Vec::new();
+        let visits = walk_with(&[plate], &|_, path| path.is_some_and(|p| emitted.iter().any(|e| e == p)));
+        assert_eq!(visits[1].1, "root");
+        assert_eq!(visits[1].2, "helper_plate");
+        assert_eq!(visits[1].4, path(&[]));
     }
 
     #[test]

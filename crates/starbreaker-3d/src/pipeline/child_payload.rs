@@ -192,6 +192,7 @@ pub(crate) fn collect_child_payload_specs(
         super::loadout_attachments::WalkOrigin::root(parent_entity_name),
         override_attachment,
         Some(&[]),
+        &super::loadout_attachments::creates_scene_nodes,
         &mut |attachment| {
             out.push(ChildPayloadSpec {
                 child: attachment.node.clone_payload_source(),

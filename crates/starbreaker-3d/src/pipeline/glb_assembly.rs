@@ -480,7 +480,14 @@ pub fn assemble_glb_with_loadout_with_progress(
         // Cargo grids and other inventory containers of the loadout (geometry-less
         // items included), and the root's own item footprint.
         let inventory_containers = if opts.include_attachments {
-            super::inventory_containers::collect_vehicle_containers(db, &resolved.children, &resolved.entity_name)
+            let emitted: HashSet<Vec<String>> =
+                child_payloads.iter().filter_map(|child| child.port_path.clone()).collect();
+            super::inventory_containers::collect_vehicle_containers(
+                db,
+                &resolved.children,
+                &resolved.entity_name,
+                &emitted,
+            )
         } else {
             Vec::new()
         };

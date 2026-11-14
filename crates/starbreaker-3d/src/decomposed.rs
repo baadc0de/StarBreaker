@@ -375,38 +375,122 @@ fn resolve_child_instance_transforms(input: &DecomposedInput) -> ResolvedInstanc
 
     builder.attach_skeleton_bones(&input.root_bones, &scene_nodes);
 
-    let children = input
-        .children
-        .iter()
-        .map(|child| resolve_instance_transform(&mut builder, &scene_nodes, child))
-        .collect();
+    // Scene instances by `port_path`: an item hangs on its parent *instance*,
+    // which a name lookup cannot tell apart from same-named siblings.
+    let mut instances = InstanceNodes::default();
+    let mut children = Vec::with_capacity(input.children.len());
+    for child in &input.children {
+        let parent = child.port_path.as_deref().and_then(|path| instances.nearest_ancestor(path));
+        let (transform, node) = resolve_instance_transform(&mut builder, &scene_nodes, &instances, parent, child);
+        if let Some(path) = &child.port_path {
+            instances.insert(path.clone(), node, child);
+        }
+        children.push(transform);
+    }
     // Containers attach after every child: their parents' nodes then exist, and
     // their (mesh-less) nodes cannot shadow a child's parent lookup.
-    // TODO(WP-K1): as for children, a `no_rotation` container resolves its
-    // helper by name in one global map, so among siblings sharing an entity
-    // name it uses the first one's helper world matrix.
     let inventory_containers = input
         .inventory_containers
         .iter()
         .map(|container| {
-            resolve_instance_transform(&mut builder, &scene_nodes, &inventory_container_payload(container))
+            let parent = container
+                .parent_port_path
+                .as_deref()
+                .filter(|path| !path.is_empty())
+                .and_then(|path| instances.get(path));
+            let payload = inventory_container_payload(container);
+            resolve_instance_transform(&mut builder, &scene_nodes, &instances, parent, &payload).0
         })
         .collect();
     ResolvedInstanceTransforms { children, inventory_containers }
 }
 
+/// The scene instances attached to the transform builder, by `port_path`.
+#[derive(Default)]
+struct InstanceNodes<'p> {
+    by_port_path: HashMap<Vec<String>, (u32, &'p crate::types::EntityPayload)>,
+    roots: HashSet<u32>,
+}
+
+impl<'p> InstanceNodes<'p> {
+    fn insert(&mut self, port_path: Vec<String>, node: u32, payload: &'p crate::types::EntityPayload) {
+        self.by_port_path.insert(port_path, (node, payload));
+        self.roots.insert(node);
+    }
+
+    fn get(&self, port_path: &[String]) -> Option<(u32, &'p crate::types::EntityPayload)> {
+        self.by_port_path.get(port_path).copied()
+    }
+
+    /// The instance of the longest proper prefix of `port_path` (`None`: the root entity).
+    fn nearest_ancestor(&self, port_path: &[String]) -> Option<(u32, &'p crate::types::EntityPayload)> {
+        (1..port_path.len()).rev().find_map(|len| self.get(&port_path[..len]))
+    }
+
+    /// The node named `name` inside `instance` (not inside instances nested in
+    /// it). A skeleton bone the builder skipped for this instance (its name was
+    /// registered by an earlier same-named sibling) is created under the
+    /// instance as the builder would have. Else the instance node itself.
+    fn helper(&self, builder: &mut GlbBuilder, instance: (u32, &crate::types::EntityPayload), name: &str) -> u32 {
+        let (root, payload) = instance;
+        let mut queue = std::collections::VecDeque::from([root]);
+        while let Some(index) = queue.pop_front() {
+            let node = &builder.nodes_json[index as usize];
+            if index != root && node.name.as_deref().is_some_and(|n| n.eq_ignore_ascii_case(name)) {
+                return index;
+            }
+            if index != root && self.roots.contains(&index) {
+                continue;
+            }
+            if let Some(children) = &node.children {
+                queue.extend(children.iter().map(|child| child.value() as u32));
+            }
+        }
+        let Some(bone) = payload.bones.iter().find(|bone| bone.name.eq_ignore_ascii_case(name)) else {
+            return root;
+        };
+        let [qw, qx, qy, qz] = bone.world_rotation;
+        let matrix = glam::Mat4::from_rotation_translation(
+            glam::Quat::from_xyzw(qx, qy, qz, qw),
+            glam::Vec3::from(bone.world_position),
+        );
+        let index = builder.nodes_json.len() as u32;
+        builder.nodes_json.push(json::Node {
+            name: Some(bone.name.clone()),
+            matrix: Some(matrix.to_cols_array()),
+            ..Default::default()
+        });
+        builder.append_child_to_node(root, index);
+        index
+    }
+}
+
+/// Move `node` under `parent` in the builder's hierarchy.
+fn reparent_node(builder: &mut GlbBuilder, node: u32, parent: u32) {
+    for other in &mut builder.nodes_json {
+        if let Some(children) = other.children.as_mut() {
+            children.retain(|child| child.value() as u32 != node);
+        }
+    }
+    builder.append_child_to_node(parent, node);
+}
+
+/// The local transform of `child`, attached under its helper on `parent` (an
+/// instance from `instances`; `None` for the root entity, whose helpers the
+/// builder's name map resolves). Also returns the child's node.
 fn resolve_instance_transform(
     builder: &mut GlbBuilder,
     scene_nodes: &[json::Index<json::Node>],
+    instances: &InstanceNodes<'_>,
+    parent: Option<(u32, &crate::types::EntityPayload)>,
     child: &crate::types::EntityPayload,
-) -> ResolvedChildTransform {
+) -> (ResolvedChildTransform, u32) {
     let mut load_textures =
         |_materials: Option<&crate::mtl::MtlFile>, _palette: Option<&crate::mtl::TintPalette>| None;
+    let instance_target = parent.map(|instance| instances.helper(builder, instance, &child.parent_node_name));
     let resolved_local_matrix = if child.no_rotation {
-        let target_idx = builder
-            .node_name_to_idx
-            .get(&child.parent_node_name.to_lowercase())
-            .copied()
+        let target_idx = instance_target
+            .or_else(|| builder.node_name_to_idx.get(&child.parent_node_name.to_lowercase()).copied())
             .or_else(|| {
                 builder
                     .node_name_to_idx
@@ -461,15 +545,24 @@ fn resolve_instance_transform(
         resolved_local_matrix,
     );
 
+    // The builder attached by name (the first same-named instance wins): hang
+    // the node on its own parent instance, so nested helpers resolve in it.
+    if let Some(target) = instance_target {
+        reparent_node(builder, child_idx, target);
+    }
+
     let local_transform_sc = flat_4x4_to_rows(
         builder.nodes_json[child_idx as usize]
             .matrix
             .unwrap_or_else(identity_flat_4x4),
     );
-    ResolvedChildTransform {
-        local_transform_sc,
-        resolved_no_rotation: child.no_rotation,
-    }
+    (
+        ResolvedChildTransform {
+            local_transform_sc,
+            resolved_no_rotation: child.no_rotation,
+        },
+        child_idx,
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -8265,6 +8358,107 @@ mod tests {
         let json = vehicle_inventory_containers_json(&input.inventory_containers, &resolved.inventory_containers);
         assert_eq!(json[0]["local_transform_sc"], serde_json::json!(expected));
         assert_eq!(json[0]["parent_port_path"], serde_json::json!(["port_plate"]));
+    }
+
+    /// A synthetic scene child with one skeleton bone (`helper`) and no NMC.
+    fn synthetic_plate(port: &str, offset_position: [f32; 3], offset_rotation: [f32; 3]) -> EntityPayload {
+        EntityPayload {
+            mesh: sample_mesh(vec![]),
+            materials: None,
+            textures: None,
+            nmc: None,
+            palette: None,
+            geometry_path: String::new(),
+            material_path: String::new(),
+            bones: vec![crate::skeleton::Bone {
+                name: "helper".into(),
+                parent_index: None,
+                object_node_index: None,
+                local_position: [0.0, 0.0, 1.0],
+                local_rotation: [1.0, 0.0, 0.0, 0.0],
+                world_position: [0.0, 0.0, 1.0],
+                world_rotation: [1.0, 0.0, 0.0, 0.0],
+                bind_world_position: [0.0, 0.0, 1.0],
+                bind_world_rotation: [1.0, 0.0, 0.0, 0.0],
+            }],
+            skeleton_source_path: None,
+            entity_name: "synthetic_plate".into(),
+            entity_category: None,
+            attach_def_type: None,
+            parent_node_name: "missing_root_helper".into(),
+            parent_entity_name: "synthetic_root".into(),
+            no_rotation: false,
+            offset_position,
+            offset_rotation,
+            detach_direction: [0.0; 3],
+            port_flags: String::new(),
+            port_path: Some(vec![port.into()]),
+            ui_bindings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn no_rotation_items_resolve_their_helper_on_their_own_parent_instance() {
+        // Two same-named plates, differently placed; a `no_rotation` grid and a
+        // `no_rotation` child hang on the second plate's `helper`.
+        let first = synthetic_plate("port_first", [0.0; 3], [0.0; 3]);
+        let second = synthetic_plate("port_second", [5.0, 0.0, 0.0], [0.0, 0.0, 90.0]);
+        let mut nested = synthetic_plate("unused", [1.0, 0.0, 0.0], [0.0; 3]);
+        nested.entity_name = "synthetic_nested".into();
+        nested.parent_entity_name = "synthetic_plate".into();
+        nested.parent_node_name = "helper".into();
+        nested.no_rotation = true;
+        nested.port_path = Some(vec!["port_second".into(), "port_nested".into()]);
+        let container = crate::pipeline::inventory_containers::VehicleInventoryContainer {
+            entity_name: "synthetic_grid".into(),
+            entity_class_guid: "class-guid".into(),
+            port_path: Some(vec!["port_second".into(), "port_grid".into()]),
+            parent_port_path: Some(vec!["port_second".into()]),
+            parent_entity_name: "synthetic_plate".into(),
+            parent_node_name: "helper".into(),
+            no_rotation: true,
+            offset_position: [1.0, 0.0, 0.0],
+            offset_rotation: [0.0; 3],
+            port_flags: String::new(),
+            container: serde_json::json!({}),
+        };
+        let input = DecomposedInput {
+            entity_name: "synthetic_root".into(),
+            geometry_path: String::new(),
+            material_path: String::new(),
+            assembly_kind: None,
+            weapon_assembly: None,
+            weapon_assembly_diagnostics: None,
+            root_mesh: sample_mesh(vec![]),
+            root_materials: None,
+            root_nmc: None,
+            root_palette: None,
+            available_palettes: Vec::new(),
+            root_bones: Vec::new(),
+            animation_sources: Vec::new(),
+            root_animation_controller: None,
+            children: vec![first, second, nested],
+            interiors: LoadedInteriors::default(),
+            paint_variants: Vec::new(),
+            animations: Vec::new(),
+            physics_grid: None,
+            inventory_containers: vec![container],
+            root_item: serde_json::Map::new(),
+        };
+        let resolved = resolve_child_instance_transforms(&input);
+
+        let plate_world = |position: [f32; 3], rotation: [f32; 3]| {
+            glam::Mat4::from_cols_array(&offset_to_gltf_matrix(position, rotation).unwrap_or(identity_flat_4x4()))
+        };
+        let helper_local = glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.0, 1.0));
+        let second_helper = plate_world([5.0, 0.0, 0.0], [0.0, 0.0, 90.0]) * helper_local;
+        let first_helper = plate_world([0.0; 3], [0.0; 3]) * helper_local;
+        let expected = |helper: glam::Mat4| {
+            flat_4x4_to_rows(resolve_no_rotation_local_matrix(helper.to_cols_array(), [1.0, 0.0, 0.0], [0.0; 3]))
+        };
+        assert_ne!(expected(second_helper), expected(first_helper), "the fixture must tell the plates apart");
+        assert_eq!(resolved.inventory_containers[0].local_transform_sc, expected(second_helper));
+        assert_eq!(resolved.children[2].local_transform_sc, expected(second_helper));
     }
 
     #[test]
