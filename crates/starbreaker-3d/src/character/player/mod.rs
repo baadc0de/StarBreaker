@@ -11,6 +11,7 @@ mod xml;
 mod tests;
 
 mod export;
+mod fire;
 mod loadouts;
 mod sources;
 pub use export::export_player;

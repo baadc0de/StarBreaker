@@ -36,7 +36,14 @@ pub fn export_player(p4k: &MappedP4k, db: &Database, request: &PlayerRequest) ->
         .parse()
         .map_err(|e| error(e.to_string()))?;
     let entries = loadouts::wearer_equipment(db, &chf, &loadouts::entries(p4k, &loadout)?)?;
-    let tree = loadouts::tree(db, &chf, &entries, gender.tag())?;
+    let mut tree = loadouts::tree(db, &chf, &entries, gender.tag())?;
+    let idx = EntityIndex::new(db);
+    if let Some(keep) = &request.weapons {
+        loadouts::select_weapons(&mut tree, &idx, keep)?;
+    }
+    if request.spare_attachments {
+        loadouts::spare_attachments(&mut tree, &idx, &[gender.tag().into()])?;
+    }
     let skeleton = body::actor_skeleton_path(db, gender.tag()).ok_or_else(|| error("no player skeleton"))?;
     let bones = crate::skeleton::parse_skeleton(&read(p4k, &skeleton)?)
         .ok_or_else(|| error("player skeleton failed to parse"))?;
@@ -69,7 +76,6 @@ pub fn export_player(p4k: &MappedP4k, db: &Database, request: &PlayerRequest) ->
         .ok_or_else(|| error("character scene missing"))?;
     let mut scene: Value =
         serde_json::from_slice(&export.files[scene_index].bytes).map_err(|e| error(e.to_string()))?;
-    let idx = EntityIndex::new(db);
     let mut weapons = Vec::new();
     let mut parts = Vec::new();
     let mut hand_ports = Vec::new();
@@ -132,7 +138,7 @@ pub fn export_player(p4k: &MappedP4k, db: &Database, request: &PlayerRequest) ->
     scene["root_entity"]["animations"] = json!(animations);
     scene["player"] = json!({"gender":request.gender.to_ascii_lowercase(),"loadout":loadout,"skeleton":skeleton,"hand_ports":hand_ports,
         "camera_bone":PLAYER_CAMERA_BONE,"root_motion_bone":bones.iter().find(|b|b.parent_index.is_none()).ok_or_else(||error("root joint missing"))?.name,
-        "weapons":weapons,"motion":motion,"blend_spaces":spaces,"diagnostics":diagnostics});
+        "weapon_selection":request.weapons,"spare_attachments":request.spare_attachments,"weapons":weapons,"motion":motion,"blend_spaces":spaces,"diagnostics":diagnostics});
     export.files[scene_index].bytes = serde_json::to_vec_pretty(&scene).map_err(|e| error(e.to_string()))?;
     // Shared assets from nested packages must have identical bytes, never silently overwrite.
     let mut seen = std::collections::BTreeMap::new();
@@ -309,7 +315,10 @@ fn attach_items(
                         }
                     }
                 }
-                weapons.push(json!({"entity":child.entity,"child_id":id,"stow_port":child.port,"mannequin_tags":ports::words(text(&attach["Tags"])),"grip_data":grip,"size":attach["Size"],"subtype":attach["SubType"]}));
+                let tags = ports::words(text(&attach["Tags"]));
+                let (fire_actions, fire_fragments) = super::fire::actions(p4k, idx.db, r, &tags)?;
+                weapons.push(json!({"entity":child.entity,"child_id":id,"stow_port":child.port,"mannequin_tags":tags,"grip_data":grip,"size":attach["Size"],"subtype":attach["SubType"],
+                    "fire_actions":fire_actions,"fire_fragments":fire_fragments}));
             }
             let package_dir = text(&node["package_dir"]).to_owned();
             scene["children"].as_array_mut().unwrap().push(node);

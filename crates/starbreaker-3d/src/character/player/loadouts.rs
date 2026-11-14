@@ -1,4 +1,6 @@
-//! Default-loadout discovery and merge onto the default CHF's item-port tree.
+//! Default-loadout discovery and merge onto the default CHF's item-port tree, and the request's edits of that
+//! tree: weapon selection ([`select_weapons`]) and spare weapon attachments on the wearer's ports
+//! ([`spare_attachments`]).
 use super::super::{Gender, loadout::LoadoutEntry};
 use super::{
     ports,
@@ -13,12 +15,22 @@ use starbreaker_p4k::MappedP4k;
 pub struct PlayerRequest {
     pub gender: String,
     pub loadout: Option<String>,
+    /// Keep only these `WeaponPersonal` items of the loadout (entity class names, case-insensitive; grenades and
+    /// melee items are `WeaponPersonal` too). `None` keeps every weapon.
+    #[serde(default)]
+    pub weapons: Option<Vec<String>>,
+    /// Put each kept weapon's default-loadout attachments (its own item-port entries, e.g. its magazine) into the
+    /// wearer's empty item ports that accept them, as the game's players carry spares on armour ports.
+    #[serde(default)]
+    pub spare_attachments: bool,
 }
 impl Default for PlayerRequest {
     fn default() -> Self {
         Self {
             gender: "male".into(),
             loadout: None,
+            weapons: None,
+            spare_attachments: false,
         }
     }
 }
@@ -133,6 +145,91 @@ pub(super) fn tree(
     }
     bind(&mut root, &idx, &tags)?;
     Ok(root)
+}
+
+fn is_weapon(idx: &EntityIndex, entity: &str) -> Result<bool> {
+    match idx.find_record(entity) {
+        Some(r) => Ok(ports::attach(idx.db, r)?["Type"] == "WeaponPersonal"),
+        None => Ok(false),
+    }
+}
+/// Drop every `WeaponPersonal` item not named in `keep` (see [`PlayerRequest::weapons`]).
+pub(super) fn select_weapons(node: &mut Item, idx: &EntityIndex, keep: &[String]) -> Result<()> {
+    let mut kept = Vec::with_capacity(node.children.len());
+    for child in std::mem::take(&mut node.children) {
+        if !is_weapon(idx, &child.entity)? || keep.iter().any(|k| k.eq_ignore_ascii_case(&child.entity)) {
+            kept.push(child);
+        }
+    }
+    node.children = kept;
+    for child in &mut node.children {
+        select_weapons(child, idx, keep)?;
+    }
+    Ok(())
+}
+/// Whether an item port's authored `Types` take an item with this `AttachDef` (type, and subtype unless the port
+/// lists none).
+pub(super) fn accepts(types: &Value, attach: &Value) -> bool {
+    let (ty, sub) = (ports::text(&attach["Type"]), ports::text(&attach["SubType"]));
+    types.as_array().into_iter().flatten().any(|t| {
+        let subs = t["SubTypes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|s| s["value"].as_str().or_else(|| s.as_str()))
+            .collect::<Vec<_>>();
+        ports::text(&t["Type"]).eq_ignore_ascii_case(ty) && (subs.is_empty() || subs.iter().any(|s| s.eq_ignore_ascii_case(sub)))
+    })
+}
+/// See [`PlayerRequest::spare_attachments`]: the wearer's items (not the weapons themselves) receive the spares.
+pub(super) fn spare_attachments(root: &mut Item, idx: &EntityIndex, tags: &[String]) -> Result<()> {
+    fn weapons(n: &Item, idx: &EntityIndex, out: &mut Vec<String>) -> Result<()> {
+        if is_weapon(idx, &n.entity)? {
+            out.push(n.entity.clone());
+        }
+        for c in &n.children {
+            weapons(c, idx, out)?;
+        }
+        Ok(())
+    }
+    let mut kept = Vec::new();
+    weapons(root, idx, &mut kept)?;
+    let mut spares = Vec::new();
+    for weapon in &kept {
+        let Some(record) = idx.find_record(weapon) else { continue };
+        for child in starbreaker_datacore::loadout::resolve_loadout_indexed(idx, record).root.children {
+            if !child.entity_name.is_empty() {
+                spares.push((child.entity_name.clone(), ports::attach(idx.db, &child.record)?));
+            }
+        }
+    }
+    fn fill(node: &mut Item, idx: &EntityIndex, tags: &[String], spares: &[(String, Value)]) -> Result<()> {
+        if !is_weapon(idx, &node.entity)? {
+            if let Some(record) = idx.find_record(&node.entity) {
+                for def in ports::ports(idx.db, record, &node.entity, tags)? {
+                    // Storage ports carry `inventory`; `select` ports (hands) are where items are used, not kept.
+                    let flag = |f: &str| def["flags"].as_array().into_iter().flatten().any(|v| v.as_str().is_some_and(|s| s.eq_ignore_ascii_case(f)));
+                    if !flag("inventory") || flag("select") {
+                        continue;
+                    }
+                    let name = ports::text(&def["name"]).to_owned();
+                    let same = |c: &Item| c.port.as_ref().is_some_and(|p| ports::text(&p["name"]).eq_ignore_ascii_case(&name));
+                    if node.children.iter().any(|c| same(c) && !c.entity.is_empty()) {
+                        continue;
+                    }
+                    if let Some((entity, _)) = spares.iter().find(|(_, attach)| accepts(&def["types"], attach)) {
+                        node.children.retain(|c| !same(c));
+                        node.children.push(Item { entity: entity.clone(), port: Some(def), children: vec![] });
+                    }
+                }
+            }
+            for c in &mut node.children {
+                fill(c, idx, tags, spares)?;
+            }
+        }
+        Ok(())
+    }
+    fill(root, idx, tags, &spares)
 }
 
 pub fn player_loadouts(p4k: &MappedP4k, db: &Database, gender: Gender) -> Result<Vec<PlayerLoadout>> {

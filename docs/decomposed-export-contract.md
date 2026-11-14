@@ -1173,8 +1173,14 @@ The additive top-level `player` object is:
 {
   gender, loadout, skeleton, camera_bone, root_motion_bone,
   hand_ports: [port],
+  weapon_selection: [string]|null, spare_attachments: bool,
   weapons: [{entity, child_id, stow_port: port, mannequin_tags: [string],
-             grip_data: SGripContainer, size, subtype}],
+             grip_data: SGripContainer, size, subtype,
+             fire_actions: [{kind, fire_rate, fire_fragment, stop_fragment, one_shot_fragment,
+                             fire_helper, muzzle_helper, effect_helpers: [string]}],
+             fire_fragments: [{fragment, guid, source, tags, frag_tags,
+                               layers: [{animation, layer, loop, speed, blend_in, blend_out,
+                                         exit_time, start_time, weight, joint_mask}]}]}],
   motion: {unavailable_tag_definitions: [string],
     states: [{weapon_child_id: string|null, stance, move_speed_tag: string|null, first_person, tags,
     fragments: [{fragment, guid, source, tags, frag_tags, query_frag_tags, scopes: [string],
@@ -1187,6 +1193,22 @@ The additive top-level `player` object is:
   diagnostics: [{kind: "missing_clip", clip, fragment, tags, frag_tags, gender}]
 }
 ```
+
+The request may narrow the loadout: `PlayerRequest.weapons` keeps only the named
+`WeaponPersonal` items (grenades and melee items are `WeaponPersonal` too; recorded as
+`weapon_selection`, null = every weapon), and `spare_attachments` puts each kept
+weapon's own default-loadout attachments (e.g. its magazine) into the wearer's empty
+storage ports that accept them: ports flagged `inventory` and not `select`, whose
+`types` list the item's `AttachDef` type and subtype (or no subtypes). Spares are
+ordinary rigid children with their `port`.
+
+`fire_actions` are the weapon's authored `SCItemWeaponComponentParams.fireActions`
+(`kind` is the action's DataCore type; helpers name the weapon's own helpers).
+`fire_fragments` are every option of the fragments those actions request, read from
+the weapon's `SEntityComponentCarryableParams.enslavementAnimationDatabase` (the ADB
+the game runs on the held item's own rig) with the weapon's `mannequin_tags` plus
+`ADS`; options keep their authored `tags` / `frag_tags` for the consumer's state.
+Layer `animation` names are the weapon's own clips (its `animations`).
 
 The camera binding is the `HeadCam` literal in StarCitizen.exe; the Player entity's
 DataCore audio-listener bones corroborate the joint but do not define a camera

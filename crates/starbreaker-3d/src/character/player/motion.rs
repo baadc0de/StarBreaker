@@ -67,7 +67,7 @@ fn groups(root: &Node) -> BTreeMap<String, Vec<String>> {
     }
     out
 }
-fn adb(
+pub(super) fn adb(
     p4k: &MappedP4k,
     path: &str,
     allowed: &BTreeSet<String>,

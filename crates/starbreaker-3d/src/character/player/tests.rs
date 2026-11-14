@@ -294,3 +294,16 @@ fn weapon_motion_base_association_can_be_authored_in_another_stance() {
     assert!(ports::subset(&tags, &context));
     assert!(!context.contains(&"unrequested_speed".into()));
 }
+
+#[test]
+fn spare_ports_accept_by_type_and_listed_subtype() {
+    let magazine = json!({"Type":"WeaponAttachment","SubType":"Magazine"});
+    let optic = json!({"Type":"WeaponAttachment","SubType":"IronSight"});
+    let listed = json!([{"Type":"WeaponAttachment","SubTypes":[{"value":"Magazine"},{"value":"Rocket"}]}]);
+    let unrestricted = json!([{"Type":"WeaponAttachment","SubTypes":[]}]);
+    let other = json!([{"Type":"Gadget","SubTypes":[]}]);
+    assert!(loadouts::accepts(&listed, &magazine));
+    assert!(!loadouts::accepts(&listed, &optic));
+    assert!(loadouts::accepts(&unrestricted, &optic));
+    assert!(!loadouts::accepts(&other, &magazine));
+}
