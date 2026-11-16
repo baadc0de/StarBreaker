@@ -9,7 +9,8 @@
 //! geometry type 0: 96 of 111 sampled `.cga` with whole-object physics, none also with per-node physics), so it
 //! moves with that node (an animated door leaf); otherwise it sits on a `$physics_object` child of the first content
 //! root whose matrix undoes that root's, so its frame is the object's. A record whose node name gives a collision
-//! class ([`crate::physics_class`]) carries it as `class`. A CryXmlB character definition (`.cdf`) has no chunks:
+//! class ([`crate::physics_class`]) carries it as `class`; the triangles without a surface of a trimesh
+//! that also has triangles with one are a record of their own, class `no_surface`. A CryXmlB character definition (`.cdf`) has no chunks:
 //! [`attach_character_physics`] adds its attachments' physics, a `CA_BONE` part's in its bone's glTF node, each
 //! record carrying its part file as `source`. Contract: docs/decomposed-export-contract.md.
 use crate::error::Error;
@@ -159,6 +160,22 @@ fn add_records(
             Some(n) => return Err(Error::Other(format!("physics: node {n} outside the NMC ({} nodes)", source.len()))),
             None => None,
         };
+        let name_class = source_node.and_then(|n| crate::physics_class::collision_class(&source[n].name));
+        // Triangles without a surface, in a trimesh that also has triangles with one, cap the openings of the
+        // collider (`physics_class`): their own record, after the solid one. A node whose name gives a class
+        // keeps one record, and so does a trimesh without a surface on any triangle (nothing marks a cap in it).
+        let mut cap = None;
+        if let (None, PhysicsGeometry::Trimesh { vertices, triangles, material_ids }) = (name_class, &e.geometry) {
+            let is_cap = |i: usize| material_ids.get(i) == Some(&crate::physics_class::NO_SURFACE);
+            let caps: Vec<[u16; 3]> = triangles.iter().enumerate().filter(|(i, _)| is_cap(*i)).map(|(_, t)| *t).collect();
+            if !caps.is_empty() && caps.len() < triangles.len() {
+                let mesh = push_trimesh(root, bin, vertices, &caps, e)?;
+                let mut r = json!({"kind": "trimesh", "mesh": mesh, "vertices": vertices.len(), "triangles": caps.len(),
+                                   "part": e.part, "class": crate::physics_class::NO_SURFACE_CLASS});
+                if let Some(origin) = origin { r["source"] = json!(origin); }
+                cap = Some((r, triangles.iter().enumerate().filter(|(i, _)| !is_cap(*i)).map(|(_, t)| *t).collect::<Vec<_>>()));
+            }
+        }
         let mut r = match &e.geometry {
             PhysicsGeometry::Box { axes, center, half_size } => json!({"kind": "box", "center": center, "half_size": half_size, "axes": axes}),
             PhysicsGeometry::Sphere { center, radius } => json!({"kind": "sphere", "center": center, "radius": radius}),
@@ -167,6 +184,7 @@ fn add_records(
             PhysicsGeometry::Capsule { center, axis, radius, half_height } =>
                 json!({"kind": "capsule", "center": center, "axis": axis, "radius": radius, "half_height": half_height}),
             PhysicsGeometry::Trimesh { vertices, triangles, .. } => {
+                let triangles = cap.as_ref().map_or(triangles, |(_, solid)| solid);
                 let mesh = push_trimesh(root, bin, vertices, triangles, e)?;
                 json!({"kind": "trimesh", "mesh": mesh, "vertices": vertices.len(), "triangles": triangles.len()})
             }
@@ -174,13 +192,16 @@ fn add_records(
             PhysicsGeometry::Sdf { bytes } => json!({"kind": "sdf", "bytes": bytes}),
         };
         r["part"] = json!(e.part);
-        if let Some(class) = source_node.and_then(|n| crate::physics_class::collision_class(&source[n].name)) {
+        if let Some(class) = name_class {
             r["class"] = json!(class);
         }
         if let Some(origin) = origin {
             r["source"] = json!(origin);
         }
         records.push((target, r));
+        if let Some((r, _)) = cap {
+            records.push((target, r));
+        }
     }
     let object: Vec<Value> = records.iter().filter(|(t, _)| t.is_none()).map(|(_, r)| r.clone()).collect();
     for (target, r) in records.into_iter().filter(|(t, _)| t.is_some()) {

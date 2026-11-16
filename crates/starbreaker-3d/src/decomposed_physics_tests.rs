@@ -220,3 +220,33 @@ fn a_character_definition_without_attachment_physics_leaves_the_glb_unchanged() 
     let glb = character_glb();
     assert_eq!(attach_physics_from(&mut read, "objects/synthetic/body.cdf", None, glb.clone()).unwrap(), glb);
 }
+
+#[test]
+fn triangles_without_a_surface_become_a_no_surface_record() {
+    // A quad: one triangle of sub-material 0, one without a surface (255): the cap over an opening.
+    let quad = |ids: Vec<u8>| PhysicsGeometry::Trimesh {
+        vertices: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]],
+        triangles: vec![[0, 1, 2], [0, 2, 3]],
+        material_ids: ids,
+    };
+    let entries = vec![
+        PhysicsEntry { node: Some(0), part: 1, geometry: quad(vec![0, 255]) },
+        PhysicsEntry { node: Some(1), part: 1, geometry: quad(vec![255, 255]) },
+    ];
+    let out = attach_physics(glb(), &entries, None, Some(&nmc(&["A", "B"]))).unwrap();
+    let (root, _) = split_glb(&out).unwrap();
+    let count = |r: &Value| {
+        let mesh = &root["meshes"][r["mesh"].as_u64().unwrap() as usize];
+        root["accessors"][mesh["primitives"][0]["indices"].as_u64().unwrap() as usize]["count"].as_u64().unwrap()
+    };
+    let a = root["nodes"][0]["extras"]["sc_physics"].as_array().unwrap();
+    assert_eq!(a.len(), 2, "the solid triangles and the cap: {a:?}");
+    assert!(a[0].get("class").is_none());
+    assert_eq!((count(&a[0]), a[0]["triangles"].as_u64(), a[0]["part"].as_u64()), (3, Some(1), Some(1)));
+    assert_eq!((a[1]["class"].as_str(), count(&a[1]), a[1]["triangles"].as_u64(), a[1]["part"].as_u64()), (Some("no_surface"), 3, Some(1), Some(1)));
+    assert_ne!(a[0]["mesh"], a[1]["mesh"]);
+    let b = root["nodes"][1]["extras"]["sc_physics"].as_array().unwrap();
+    assert_eq!(b.len(), 1, "no surface on any triangle: nothing marks a cap, an ordinary collider");
+    assert!(b[0].get("class").is_none());
+    assert_eq!(count(&b[0]), 6);
+}

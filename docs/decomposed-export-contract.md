@@ -66,6 +66,12 @@ assets (`decomposed_physics.rs`):
   (`TIRES_ONLY_COLLISION(S)`), `player_only` (`PLAYER_ONLY_COLLISIONS`), `no_terrain` (`IGNORE_TERRAIN_COLLIDE` /
   `_COLLISION`, `NO_TERRAIN_COLLISION`), `grid_volume` (`physicsgrid_` / `localgrid_allow_no_collide*`). Absent:
   an ordinary collider.
+- One class comes from the geometry: in a trimesh that has triangles with a surface and triangles without one
+  (per-triangle sub-material index 255), the latter are split off into a second `trimesh` record on the same
+  node, same `part`, `class: "no_surface"`, after the record of the triangles with a surface. On vehicle hulls
+  they are the faces that close the collider over an opening another part fills (ramp, door, canopy, gear bay,
+  engine nozzle): no obstacle to what passes the opening. A node whose name gives a class keeps one record; so
+  does a trimesh without a surface on any triangle (an ordinary collider).
 - Nodes the export drops (`filter_nmc_hierarchy`, e.g. `$proxy_*`) that carry colliders are recreated as
   transform-only nodes. Whole-object physics (`0xFFFF`) sits on the object's single geometry node, else on a
   `$physics_object` node whose frame is the object's.

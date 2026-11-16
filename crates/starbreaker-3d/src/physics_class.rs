@@ -6,6 +6,21 @@
 //! `PLAYER_ONLY_COLLISIONS`, `IGNORE_TERRAIN_COLLIDE` / `_COLLISION`, `NO_TERRAIN_COLLISION`, and
 //! `physicsgrid_` / `localgrid_allow_no_collide_*` local physics-grid extensions (cargo lifts, ramps, docking
 //! collars). Contract: docs/decomposed-export-contract.md.
+//!
+//! One class comes from the geometry itself: a trimesh carries a sub-material index per triangle, and
+//! [`NO_SURFACE`] marks triangles that have none. In a collider that also has triangles with a surface (vehicle
+//! hulls) these are the faces that close it over an opening another part fills (a ramp, a door, a canopy, a gear
+//! bay, an engine nozzle): [`NO_SURFACE_CLASS`]. Surveyed on 21 700 ship geometry files (WP-P4): 32 278 of
+//! 2 355 546 trimesh triangles; 697 colliders in 275 files (nearly all of them a ship's exterior `.cga`) mix
+//! both. 87 colliders have no surface on any triangle (mostly 12-triangle boxes on lifts, ramps and docking
+//! collars): nothing marks a cap in those, they stay ordinary colliders.
+
+/// Per-triangle sub-material index of a trimesh triangle without a surface (CryPhysics `char` −1).
+pub(crate) const NO_SURFACE: u8 = 255;
+/// Class of the triangles without a surface in a collider that has triangles with one: the cap the collider
+/// closes an opening with, no obstacle to what passes the opening (the part that fills it carries its own
+/// colliders, in its own pose).
+pub(crate) const NO_SURFACE_CLASS: &str = "no_surface";
 
 /// The collision class a node's name gives its colliders, case-insensitively:
 /// - `interaction`: `$IP_*` — interaction-point volumes (use prompts), not physical obstacles;
