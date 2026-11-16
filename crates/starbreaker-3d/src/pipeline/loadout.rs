@@ -121,10 +121,18 @@ pub fn resolve_loadout_meshes(
         p4k.entry_case_insensitive(&companion).is_some()
     };
 
-    // Load invisible port flags from vehicle XML (empty for non-vehicles).
+    // Load invisible port flags and SubGeometry selectors from vehicle XML (empty for non-vehicles).
     let invisible_ports = load_invisible_ports(db, p4k, record);
+    let port_selectors = load_vehicle_port_selectors(db, p4k, record);
 
-    let mut children = resolve_children(db, p4k, &tree.root.children, opts, &invisible_ports);
+    let mut children = resolve_children(
+        db,
+        p4k,
+        &tree.root.children,
+        opts,
+        &invisible_ports,
+        &port_selectors,
+    );
 
     // Load Tread/Wheel parts from vehicle definition XML (ground vehicles).
     // These are geometry parts not represented in the DataCore loadout tree.
@@ -281,12 +289,14 @@ pub(crate) fn resolve_children(
     nodes: &[starbreaker_datacore::loadout::LoadoutNode],
     opts: &ExportOptions,
     invisible_ports: &std::collections::HashSet<String>,
+    port_selectors: &HashMap<String, String>,
 ) -> Vec<crate::types::ResolvedNode> {
     use rayon::prelude::*;
 
     nodes
         .par_iter()
         .map(|node| {
+            let (geometry_path, material_path) = port_selected_geometry(db, node, port_selectors);
             let attachment_name = node
                 .helper_bone_name
                 .clone()
@@ -297,9 +307,9 @@ pub(crate) fn resolve_children(
                     || !opts.include_shields
                         && is_shield_related_name(&attachment_name)
                     || !opts.include_shields
-                        && path_is_shield_related(node.geometry_path.as_deref())
+                        && path_is_shield_related(geometry_path.as_deref())
                     || !opts.include_shields
-                        && path_is_shield_related(node.material_path.as_deref())
+                        && path_is_shield_related(material_path.as_deref())
             {
                 log::info!(
                     "  {} -> shield export disabled, skipping geometry and children",
@@ -319,7 +329,7 @@ pub(crate) fn resolve_children(
                     has_geometry: false,
                     record: node.record,
                     geometry_path: None,
-                    material_path: node.material_path.clone(),
+                    material_path: material_path.clone(),
                     allows_child_object_containers: true,
                     children: Vec::new(),
                 };
@@ -344,15 +354,17 @@ pub(crate) fn resolve_children(
                     has_geometry: false,
                     record: node.record,
                     geometry_path: None,
-                    material_path: node.material_path.clone(),
+                    material_path: material_path.clone(),
                     allows_child_object_containers: true,
                     children: Vec::new(),
                 };
             }
 
-            let children = resolve_children(db, p4k, &node.children, opts, invisible_ports);
+            // Vehicle XML port selectors belong to the vehicle's own ports only.
+            let children =
+                resolve_children(db, p4k, &node.children, opts, invisible_ports, &HashMap::new());
 
-            let Some(geom_path) = &node.geometry_path else {
+            let Some(geom_path) = &geometry_path else {
                 return crate::types::ResolvedNode {
                     entity_name: node.entity_name.clone(),
                     attachment_name,
@@ -367,14 +379,14 @@ pub(crate) fn resolve_children(
                     has_geometry: false,
                     record: node.record,
                     geometry_path: None,
-                    material_path: node.material_path.clone(),
+                    material_path: material_path.clone(),
                     allows_child_object_containers: true,
                     children,
                 };
             };
 
             // Load NMC from .cga (always, even if .cgam is missing).
-            let mat_path = node.material_path.as_deref().unwrap_or("");
+            let mat_path = material_path.as_deref().unwrap_or("");
             let (nmc, _mtl) = load_nmc_and_material(p4k, geom_path, mat_path);
 
             // Probe whether mesh companion exists.
@@ -425,12 +437,56 @@ pub(crate) fn resolve_children(
                 has_geometry,
                 record: node.record,
                 geometry_path: Some(geom_path.clone()),
-                material_path: node.material_path.clone(),
+                material_path: material_path.clone(),
                 allows_child_object_containers: true,
                 children,
             }
         })
         .collect()
+}
+
+/// Geometry and material for a loadout node, re-selecting its SubGeometry variant
+/// from the vehicle XML port definition when one exists (see
+/// `select_port_sub_geometry`): the loadout's name-based pick applies only to
+/// ports without an authored definition.
+fn port_selected_geometry(
+    db: &Database,
+    node: &starbreaker_datacore::loadout::LoadoutNode,
+    port_selectors: &HashMap<String, String>,
+) -> (Option<String>, Option<String>) {
+    use starbreaker_datacore::loadout::{
+        PortSubGeometry, record_geometry_paths, select_port_sub_geometry, sub_geometry_variants,
+    };
+    let loadout_pick = || (node.geometry_path.clone(), node.material_path.clone());
+    let Some(selector) = port_selectors.get(&node.item_port_name.to_ascii_lowercase()) else {
+        return loadout_pick();
+    };
+    let variants = sub_geometry_variants(db, &node.record);
+    let Some(choice) = select_port_sub_geometry(&variants, selector) else {
+        return loadout_pick();
+    };
+    let (default_geometry, default_material) = record_geometry_paths(db, &node.record);
+    match choice {
+        PortSubGeometry::Variant(variant) => (
+            Some(variant.geometry_path.clone()),
+            if variant.material_path.is_empty() {
+                default_material
+            } else {
+                Some(variant.material_path.clone())
+            },
+        ),
+        // A record without default geometry renders only through a variant; keep the loadout's.
+        PortSubGeometry::Default if default_geometry.is_none() => loadout_pick(),
+        PortSubGeometry::Default => {
+            if default_geometry != node.geometry_path {
+                log::info!(
+                    "  {} on port '{}' (selector '{}'): default geometry {:?} instead of {:?}",
+                    node.entity_name, node.item_port_name, selector, default_geometry, node.geometry_path
+                );
+            }
+            (default_geometry, default_material)
+        }
+    }
 }
 
 pub(crate) fn is_shield_related_name(value: &str) -> bool {

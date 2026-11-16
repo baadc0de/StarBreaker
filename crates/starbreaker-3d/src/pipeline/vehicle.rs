@@ -3,12 +3,14 @@
 //! `query_landing_gear` reads landing gear geometry paths and bone names from a
 //! `VehicleLandingGearSystem` DataCore record. `load_invisible_ports` reads the
 //! vehicle XML override to find ports that should be hidden in the scene.
-//! `load_vehicle_xml_parts` parses the vehicle XML into a flat list of `VehicleXmlPart`
+//! `load_vehicle_port_selectors` reads each port's `flags` + `portTags`, which
+//! select an attached item's SubGeometry variant. `load_vehicle_xml_parts` parses the vehicle XML into a flat list of `VehicleXmlPart`
 //! structs, each describing a named geometry attachment with transform and flags.
 
 use starbreaker_datacore::database::Database;
 use starbreaker_datacore::types::Record;
 use starbreaker_p4k::MappedP4k;
+use std::collections::HashMap;
 
 use super::datacore_path_to_p4k;
 
@@ -187,6 +189,53 @@ fn collect_invisible_ports_from_xml_override(
     }
 }
 
+// ── Vehicle XML port SubGeometry selectors ────────────────────────────────────
+
+/// Load each vehicle XML item port's SubGeometry selector: its `flags` and
+/// `portTags` joined, whose tokens pick an attached item's tagged geometry
+/// variant (`left`/`right`, `lower`, `rear_top_right`, ...). Keys are lowercase
+/// port (Part) names; a modification's port definition replaces the base one.
+/// Empty for non-vehicle entities.
+pub(crate) fn load_vehicle_port_selectors(
+    db: &Database,
+    p4k: &MappedP4k,
+    record: &Record,
+) -> HashMap<String, String> {
+    let mut selectors = HashMap::new();
+    super::vehicle_xml::visit_vehicle_xml(db, p4k, record, |xml, _modification| {
+        collect_port_selectors(xml, xml.root(), &mut selectors);
+    });
+    selectors
+}
+
+fn collect_port_selectors(
+    xml: &starbreaker_cryxml::CryXml,
+    node: &starbreaker_cryxml::CryXmlNode,
+    selectors: &mut HashMap<String, String>,
+) {
+    if xml.node_tag(node) == "Part" {
+        let part_name = xml
+            .node_attributes(node)
+            .find(|(k, _)| *k == "name")
+            .map_or("", |(_, v)| v);
+        for child in xml.node_children(node) {
+            if xml.node_tag(child) != "ItemPort" || part_name.is_empty() {
+                continue;
+            }
+            let attr = |key: &str| {
+                xml.node_attributes(child)
+                    .find(|(k, _)| *k == key)
+                    .map_or("", |(_, v)| v)
+            };
+            let selector = format!("{} {}", attr("flags"), attr("portTags"));
+            selectors.insert(part_name.to_ascii_lowercase(), selector.trim().to_owned());
+        }
+    }
+    for child in xml.node_children(node) {
+        collect_port_selectors(xml, child, selectors);
+    }
+}
+
 // ── Vehicle XML Tread / Wheel part extraction ─────────────────────────────────
 
 /// A geometry part extracted from a vehicle definition XML (treads, wheels).
@@ -333,5 +382,27 @@ fn collect_vehicle_parts(
 
     for child in xml.node_children(node) {
         collect_vehicle_parts(xml, child, parts);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn port_selectors_join_flags_and_port_tags_and_modifications_replace() {
+        let mut selectors = HashMap::new();
+        for text in [
+            r#"<Vehicle><Parts><Part name="Hardpoint_A" class="ItemPort"><ItemPort flags="maneuver uneditable left" portTags="tag_a"/></Part><Part name="hardpoint_b" class="ItemPort"><ItemPort flags="maneuver orientation +Y uneditable"/><Parts><Part name="hardpoint_c" class="ItemPort"><ItemPort portTags="lower"/></Part></Parts></Part></Parts></Vehicle>"#,
+            r#"<Modifications><Part name="hardpoint_b" class="ItemPort"><ItemPort flags="uneditable right"/></Part></Modifications>"#,
+        ] {
+            let bytes = crate::test_xml::encode(text);
+            let xml = starbreaker_cryxml::from_bytes(&bytes).unwrap();
+            collect_port_selectors(&xml, xml.root(), &mut selectors);
+        }
+        assert_eq!(selectors.len(), 3);
+        assert_eq!(selectors["hardpoint_a"], "maneuver uneditable left tag_a");
+        assert_eq!(selectors["hardpoint_b"], "uneditable right");
+        assert_eq!(selectors["hardpoint_c"], "lower");
     }
 }

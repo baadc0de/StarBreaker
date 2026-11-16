@@ -2,6 +2,9 @@
 //! [`LoadoutTree`] of [`LoadoutNode`]s with item-port helper placement
 //! (`resolve_loadout_indexed`), and resolves manual loadouts authored outside
 //! DataCore against a parent's item ports (`resolve_manual_loadout_indexed`).
+//! Without port data the loadout picks SubGeometry variants by port tags, helper
+//! or port name; exporters that know a port's authored selector (vehicle XML)
+//! re-select with `select_port_sub_geometry`.
 use crate::database::Database;
 use crate::query::compile::CompiledPath;
 use crate::query::value::Value;
@@ -624,6 +627,52 @@ fn best_sub_geometry_variant_match<'a>(
         .map(|(_, _, variant)| variant)
 }
 
+/// Geometry an item takes on a port whose definition is known (see
+/// [`select_port_sub_geometry`]).
+#[derive(Debug)]
+pub enum PortSubGeometry<'a> {
+    /// The SubGeometry variant whose tags the port selects.
+    Variant(&'a SubGeometryVariant),
+    /// No variant selected: the record's default `Geometry`.
+    Default,
+}
+
+/// SubGeometry selection for an item on a port with an authored definition
+/// (a vehicle XML `ItemPort`): the port's selector tokens (`flags` and
+/// `portTags`, e.g. `left`, `lower`, `rear_top_right`) pick the most specific
+/// variant whose tags they all contain; when none matches the engine keeps the
+/// record's default geometry. The port *name* plays no part — an item reused
+/// across ships can carry variants its new port never selects. `None` when the
+/// record has no SubGeometry variants.
+pub fn select_port_sub_geometry<'a>(
+    variants: &'a [SubGeometryVariant],
+    port_selector: &str,
+) -> Option<PortSubGeometry<'a>> {
+    if variants.is_empty() {
+        return None;
+    }
+    Some(
+        best_sub_geometry_variant_match(variants, port_selector)
+            .map_or(PortSubGeometry::Default, PortSubGeometry::Variant),
+    )
+}
+
+/// A record's default `SGeometryResourceParams` geometry and material paths
+/// (empty paths as `None`); the uncached counterpart of
+/// [`EntityIndex::query_geometry_paths`].
+pub fn record_geometry_paths(db: &Database, record: &Record) -> (Option<String>, Option<String>) {
+    let query = |path: &str| {
+        db.compile_path::<String>(record.struct_id(), path)
+            .ok()
+            .and_then(|compiled| db.query_single::<String>(&compiled, record).ok().flatten())
+            .filter(|value| !value.is_empty())
+    };
+    (
+        query("Components[SGeometryResourceParams].Geometry.Geometry.Geometry.path"),
+        query("Components[SGeometryResourceParams].Geometry.Geometry.Material.path"),
+    )
+}
+
 /// Resolve the full loadout tree for an entity, recursively walking
 /// `SEntityComponentDefaultLoadoutParams.loadout.entries[]` on each child.
 ///
@@ -993,6 +1042,46 @@ mod tests {
 
         assert!(should_attempt_sub_geometry_resolution(None, &variants));
         assert!(!should_attempt_sub_geometry_resolution(None, &[]));
+    }
+
+    fn variant(tag: &str, geometry_path: &str) -> SubGeometryVariant {
+        SubGeometryVariant {
+            tag: tag.to_string(),
+            geometry_path: geometry_path.to_string(),
+            material_path: String::new(),
+            deformer_type: String::new(),
+        }
+    }
+
+    #[test]
+    fn port_selector_without_variant_tokens_keeps_default_geometry() {
+        // An item whose SubGeometry carries side variants (e.g. inherited from a
+        // template) on a port whose definition names no side: the engine keeps the
+        // record's default geometry, whatever the port's name says.
+        let variants = vec![variant("left", "synthetic/side_left.cga"), variant("right", "synthetic/side_right.cga")];
+        for selector in ["maneuver orientation +Y uneditable", ""] {
+            assert!(matches!(
+                select_port_sub_geometry(&variants, selector),
+                Some(PortSubGeometry::Default)
+            ));
+        }
+    }
+
+    #[test]
+    fn port_selector_tokens_pick_the_most_specific_variant() {
+        let variants = vec![
+            variant("upper", "synthetic/upper_rear_left.cdf"),
+            variant("upper left", "synthetic/upper_front_left.cdf"),
+            variant("upper right", "synthetic/upper_front_right.cdf"),
+            variant("rear top right", "synthetic/rear_top_right.cga"),
+        ];
+        let pick = |selector| match select_port_sub_geometry(&variants, selector) {
+            Some(PortSubGeometry::Variant(v)) => v.geometry_path.as_str(),
+            other => panic!("{selector}: expected a variant, got {other:?}"),
+        };
+        assert_eq!(pick("maneuver orientation retro -X -Z upper front right uneditable"), "synthetic/upper_front_right.cdf");
+        assert_eq!(pick("$uneditable rear_top_right"), "synthetic/rear_top_right.cga");
+        assert!(select_port_sub_geometry(&[], "left").is_none());
     }
 
     #[test]

@@ -48,6 +48,7 @@ pub fn entity_clip_catalogue(
             &tree.root.children,
             &opts,
             &load_invisible_ports(db, p4k, record),
+            &load_vehicle_port_selectors(db, p4k, record),
         )
     } else {
         Vec::new()
