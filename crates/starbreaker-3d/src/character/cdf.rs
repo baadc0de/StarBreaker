@@ -168,7 +168,7 @@ mod tests {
     //
     // CryXmlNode (28 bytes, packed):
     //   tag_string_offset: u32
-    //   item_type: u32
+    //   content_string_offset: u32 (the node's text; 0 = the pool's leading empty string)
     //   attribute_count: u16
     //   child_count: u16
     //   parent_index: i32
@@ -232,6 +232,7 @@ mod tests {
 
         // Collect all strings that appear.
         let mut all_strings: Vec<&str> = vec![
+            "", // offset 0: the empty string every node's content offset points at
             "CharacterDefinition",
             "Model",
             "File",
@@ -372,7 +373,7 @@ mod tests {
         first_child_idx: i32,
     ) {
         out.extend_from_slice(&u32le(tag_offset)); // tag_string_offset
-        out.extend_from_slice(&u32le(0)); // item_type (unused)
+        out.extend_from_slice(&u32le(0)); // content_string_offset: no text (the empty string)
         out.extend_from_slice(&u16le(attr_count)); // attribute_count
         out.extend_from_slice(&u16le(child_count)); // child_count
         out.extend_from_slice(&i32le(parent_index)); // parent_index

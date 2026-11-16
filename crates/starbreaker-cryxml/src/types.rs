@@ -23,8 +23,8 @@ pub struct CryXmlHeader {
 pub struct CryXmlNode {
     /// Byte offset into the string data section for this node's tag name.
     pub tag_string_offset: u32,
-    /// Unused type discriminator.
-    pub item_type: u32,
+    /// Byte offset into the string data section for this node's text content (the empty string when it has none).
+    pub content_string_offset: u32,
     /// Number of attributes on this node.
     pub attribute_count: u16,
     /// Number of direct children of this node.

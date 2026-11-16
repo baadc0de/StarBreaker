@@ -1,3 +1,6 @@
+//! CryXmlB (CryEngine binary XML) reader: `from_bytes` borrows the node, child, attribute and string tables; `CryXml`
+//! resolves tags, text content and attributes and writes the document back as text XML (`Display`).
+
 use std::fmt::{self, Write};
 
 use starbreaker_common::SpanReader;
@@ -61,6 +64,11 @@ impl<'a> CryXml<'a> {
         self.get_string(node.tag_string_offset)
     }
 
+    /// Resolve the text content of a node (empty when it has none).
+    pub fn node_content(&self, node: &CryXmlNode) -> &'a str {
+        self.get_string(node.content_string_offset)
+    }
+
     /// Iterate over `(key, value)` attribute pairs for a node.
     pub fn node_attributes(
         &self,
@@ -116,10 +124,16 @@ impl<'a> CryXml<'a> {
         let child_start = node.first_child_index as usize;
         let child_count = node.child_count as usize;
 
-        if child_count == 0 {
+        let content = self.get_string(node.content_string_offset);
+
+        if child_count == 0 && content.is_empty() {
             buf.push_str(" />\n");
+        } else if child_count == 0 {
+            let _ = writeln!(buf, ">{}</{tag}>", escape_xml_text(content));
         } else {
-            buf.push_str(">\n");
+            buf.push('>');
+            buf.push_str(&escape_xml_text(content));
+            buf.push('\n');
             for &child_idx in &self.child_indices[child_start..child_start + child_count] {
                 self.write_node(buf, child_idx as usize, depth + 1);
             }
@@ -134,6 +148,20 @@ impl fmt::Display for CryXml<'_> {
         self.write_node(&mut buf, 0, 0);
         f.write_str(&buf)
     }
+}
+
+/// Escape the characters that are special in element text.
+fn escape_xml_text(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 /// Escape the five XML-special characters inside attribute values.
