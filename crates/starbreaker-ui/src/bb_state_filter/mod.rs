@@ -189,7 +189,7 @@ pub fn instantiated_false_widgets_with_param_inputs_inherited_bindings_and_defau
             }
             if let Some(crate::canvas::Value::Bool(value)) = defaults.lookup_path(binding) {
                 static_vals.insert(binding.to_owned(), *value);
-            } else if defaults.owner_user_variable_known(binding) {
+            } else if defaults.lookup_path(binding).is_none() && defaults.owner_user_variable_known(binding) {
                 // An owner user variable the owner does not declare: its default.
                 static_vals.insert(binding.to_owned(), false);
             }

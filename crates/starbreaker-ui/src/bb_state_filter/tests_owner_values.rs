@@ -52,3 +52,18 @@ fn without_owner_values_an_unset_variable_keeps_the_conservative_show() {
     let hidden = false_widgets(&header_canvas(), &[], &Default::default(), Some(&DefaultValueRegistry::default()));
     assert!(!hidden.contains(&1) && !hidden.contains(&8), "runtime-gated UI stays shown without owner values: {hidden:?}");
 }
+
+/// Review fix: a variable the registry HOLDS with a non-boolean value is not an undeclared owner variable; it keeps the
+/// filter's existing handling (no conclusive `false`). Synthetic names.
+#[test]
+fn a_held_non_boolean_value_is_not_forced_false() {
+    let canvas = json!({"_Type_": "BuildingBlocks_Canvas", "operations": [
+        {"_Pointer_": "ptr:9", "_Type_": "BuildingBlocks_BindingsBooleanVariable", "binding": "test.held.flag"},
+        {"_Type_": "BuildingBlocks_BindingsBooleanField", "widget": "_PointsTo_:ptr:8", "field": "IsActive", "input": "_PointsTo_:ptr:9"}
+    ]});
+    let mut defaults = DefaultValueRegistry::default();
+    defaults.insert_path("test.held.flag", Value::Int(1));
+    defaults.set_owner_user_variables_known(true);
+    let hidden = false_widgets(&canvas, &[], &Default::default(), Some(&defaults));
+    assert!(!hidden.contains(&8), "a held value is not an undeclared variable: {hidden:?}");
+}

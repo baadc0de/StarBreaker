@@ -195,6 +195,37 @@ mod materialised_entry_tests {
         assert!((one.rects[&2].w - 200.0).abs() < 0.5, "one spans it: {:?}", one.rects[&2]);
     }
 
+    /// Review fix: a non-grow item beside a growing one keeps its own
+    /// cross-dependent sizing and its authored cross offset — a `PercentOfY`
+    /// width is a fraction of the item's OWN height (a 20-high bullet is 20
+    /// wide, not the row's height), and a cross-axis position offset still
+    /// moves it. Synthetic sizes.
+    #[test]
+    fn flex_non_grow_item_beside_a_grow_item_keeps_percent_of_y_and_cross_offset() {
+        let fixed = |v: f32| serde_json::json!({"value": v, "behavior": "Fixed"});
+        let scene = vec![
+            serde_json::json!({"_Pointer_": "ptr:1", "_Type_": "BuildingBlocks_DisplayWidget",
+                "name": "row", "isActive": true, "sizing": {"width": fixed(200.0), "height": fixed(100.0)},
+                "layoutPolicy": {"_Type_": "BuildingBlocks_FlexContainer", "direction": "Row",
+                    "axisJustification": "Start", "crossAxisJustification": "Start"}}),
+            serde_json::json!({"_Pointer_": "ptr:2", "_Type_": "BuildingBlocks_DisplayWidget",
+                "name": "bullet", "parent": "_PointsTo_:ptr:1", "isActive": true,
+                "position": {"x": 0.0, "y": 30.0, "z": 0.0},
+                "sizing": {"width": {"value": 1.0, "behavior": "PercentOfY"}, "height": fixed(20.0)}}),
+            serde_json::json!({"_Pointer_": "ptr:3", "_Type_": "BuildingBlocks_DisplayWidget",
+                "name": "fill", "parent": "_PointsTo_:ptr:1", "isActive": true,
+                "layoutPolicyItem": {"_Type_": "BuildingBlocks_FlexItem", "growProportion": 1.0},
+                "sizing": {"width": fixed(10.0), "height": fixed(100.0)}}),
+        ];
+        let canvas = serde_json::json!({"_RecordValue_": {"_Type_": "BuildingBlocks_Canvas",
+            "size": {"x": 200.0, "y": 100.0}, "coordinateMethod": "useRaw", "operations": [], "scene": scene}});
+        let result = layout(&parse_bb_canvas(&canvas).expect("fixture parses"), 200, 100);
+        let (bullet, fill) = (result.rects[&2], result.rects[&3]);
+        assert!((bullet.w - 20.0).abs() < 0.5 && (bullet.h - 20.0).abs() < 0.5, "a 20 x 20 bullet: {bullet:?}");
+        assert!((bullet.y - 30.0).abs() < 0.5, "its cross offset stands: {bullet:?}");
+        assert!((fill.x - 20.0).abs() < 0.5 && (fill.w - 180.0).abs() < 0.5, "the grow item takes the rest: {fill:?}");
+    }
+
     /// The companion to the ✕ fix: a Center cross-justified column item that
     /// DOES author a cross-axis anchor keeps its overlay `anchor.x*W - pivot.x*w`
     /// offset. A self-consistent anchor==pivot==0.5 (the countermeasure firing
