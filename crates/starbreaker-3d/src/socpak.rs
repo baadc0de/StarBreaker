@@ -2095,6 +2095,9 @@ fn build_light_info_from_fields(
         attenuation_tweak: source
             .float("miscParams.attenuationTweak")
             .unwrap_or_else(crate::types::light_unit_multiplier),
+        specular_multiplier: source
+            .float("miscParams.specularMultiplier")
+            .unwrap_or_else(crate::types::light_unit_multiplier),
         plane_softness: source.float("miscParams.planeSoftness"),
         fade_min_distance_m: source.float("fadeParams.minDistance"),
         fade_max_distance_m: source.float("fadeParams.maxDistance"),

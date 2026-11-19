@@ -519,6 +519,7 @@ attribute.
 | `max_shadow_cast_distance_m` | `shadowParams.maxShadowCastDist` | null |
 | `affects_this_area_only`, `affect_gi` | component `affectsThisAreaOnly`, resolved `affectGI` | null |
 | `attenuation_tweak` | `miscParams.attenuationTweak` | 1.0 |
+| `specular_multiplier` | `miscParams.specularMultiplier` (scales the light's specular; 0 = diffuse only) | 1.0 |
 | `plane_softness` | `miscParams.planeSoftness` | null |
 | `fade_min_distance_m`, `fade_max_distance_m` | `fadeParams.minDistance`, `maxDistance` | null |
 | `importance` | component `importance` (integer or DataCore enum option index) | null |

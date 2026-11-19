@@ -971,6 +971,9 @@ pub struct LightInfo {
     pub affect_gi_mode: Option<String>,
     #[serde(default = "light_unit_multiplier")]
     pub attenuation_tweak: f32,
+    /// `miscParams.specularMultiplier`: scales the light's specular (0 = diffuse only), class-inherited, 1 when unauthored.
+    #[serde(default = "light_unit_multiplier")]
+    pub specular_multiplier: f32,
     pub plane_softness: Option<f32>,
     pub fade_min_distance_m: Option<f32>,
     pub fade_max_distance_m: Option<f32>,

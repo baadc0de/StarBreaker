@@ -183,6 +183,15 @@ fn authored_fields_and_zero_default_survive() {
 }
 
 #[test]
+fn specular_multiplier_is_exported_with_explicit_zero() {
+    // miscParams.specularMultiplier scales the light's specular in the game's shaders (light colour alpha); 0 = diffuse only.
+    let light = parse(r#"<EntityComponentLight><miscParams specularMultiplier="0"/></EntityComponentLight>"#);
+    assert_eq!(light["specular_multiplier"], 0.0);
+    let light = parse(r#"<EntityComponentLight><miscParams specularMultiplier="0.375"/></EntityComponentLight>"#);
+    assert_eq!(light["specular_multiplier"], 0.375);
+}
+
+#[test]
 fn default_state_wins_even_when_off() {
     let light = parse(
         r#"<EntityComponentLight><defaultState intensity="0"><color r="0.25" g="0.5" b="0.75"/></defaultState><auxiliaryState intensity="3"/></EntityComponentLight>"#,
@@ -273,6 +282,7 @@ fn sparse_component_keeps_optional_fields_unknown() {
     let light = parse("<EntityComponentLight/>");
     assert!((light["bulb_radius_m"].as_f64().unwrap() - 0.05).abs() < 1e-7);
     assert_eq!(light["attenuation_tweak"], 1.0);
+    assert_eq!(light["specular_multiplier"], 1.0);
     assert!(light["glow_multiplier"].is_null());
     for field in [
         "plane_width_m",
@@ -356,6 +366,8 @@ fn partial_default_inherits_intensity_but_explicit_zero_wins() {
         .insert("sizeParams.bulbRadius".into(), "0.375".into());
     base.attributes
         .insert("miscParams.attenuationTweak".into(), "0.625".into());
+    base.attributes
+        .insert("miscParams.specularMultiplier".into(), "0.25".into());
     for (attributes, expected) in [("", 1.0), ("intensity=\"0\"", 0.0)] {
         let bytes = crate::test_xml::encode(&format!(
             "<EntityComponentLight><defaultState {attributes}/></EntityComponentLight>"
@@ -368,6 +380,7 @@ fn partial_default_inherits_intensity_but_explicit_zero_wins() {
         assert_eq!(light.states["defaultState"].temperature, Some(6600.0));
         assert_eq!(light.bulb_radius_m, 0.375);
         assert_eq!(light.attenuation_tweak, 0.625);
+        assert_eq!(light.specular_multiplier, 0.25);
     }
 }
 
