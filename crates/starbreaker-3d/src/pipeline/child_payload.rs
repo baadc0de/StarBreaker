@@ -602,7 +602,7 @@ fn entity_record_category(db: &Database, record: &starbreaker_datacore::types::R
         .filter(|category| !category.is_empty())
 }
 
-fn entity_record_attach_def_type(
+pub(crate) fn entity_record_attach_def_type(
     db: &Database,
     record: &starbreaker_datacore::types::Record,
 ) -> Option<String> {
@@ -667,6 +667,7 @@ pub(crate) fn ui_binding_for_record(db: &Database, record: &Record) -> Option<Ui
                 generated_provenance: None,
                 generated_confidence: None,
                 ui_screen_aspect_w_over_h: None,
+                source_item_type: entity_record_attach_def_type(db, record),
             });
         }
     }
@@ -719,6 +720,7 @@ pub(crate) fn ui_binding_for_record(db: &Database, record: &Record) -> Option<Ui
                 generated_provenance: None,
                 generated_confidence: None,
                 ui_screen_aspect_w_over_h: None,
+                source_item_type: entity_record_attach_def_type(db, record),
             });
         }
     }
@@ -868,6 +870,7 @@ pub(crate) fn ui_binding_for_record(db: &Database, record: &Record) -> Option<Ui
         generated_provenance: None,
         generated_confidence: None,
         ui_screen_aspect_w_over_h: None,
+        source_item_type: entity_record_attach_def_type(db, record),
     })
 }
 

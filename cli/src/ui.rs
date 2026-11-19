@@ -282,6 +282,7 @@ fn parse_ui_binding(v: &Value) -> Option<UiBinding> {
             .get("ui_screen_aspect_w_over_h")
             .and_then(|v| v.as_f64())
             .map(|n| n as f32),
+        source_item_type: opt_str("source_item_type"),
     })
 }
 

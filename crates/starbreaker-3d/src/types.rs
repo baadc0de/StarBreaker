@@ -850,6 +850,12 @@ pub struct UiBinding {
     /// `M_Physical_Screen` 16:9 canvas. `None` when the screen mesh is
     /// unavailable or not measurable; sizing then falls back to canvas/SWF.
     pub ui_screen_aspect_w_over_h: Option<f32>,
+    /// Item type (`SAttachableComponentParams.AttachDef.Type`) of the entity whose UI component this is: `Display`
+    /// for display items (vehicle MFDs and physical screens, HUD projectors, radar displays, signage screens),
+    /// `ControlPanel` for door and light panels, `Usable` for usables, and so on. `None` when that entity is not an
+    /// attachable item (transit panels) or its record is unknown. Lets a consumer tell an operating panel from a
+    /// display without names. Not part of the render identity.
+    pub source_item_type: Option<String>,
 }
 
 pub struct EntityPayload {

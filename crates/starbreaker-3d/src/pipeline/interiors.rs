@@ -882,24 +882,6 @@ fn interior_ui_bindings_for_mesh(
     // canvas is authoritative — the inline-geometry entity carries neither an
     // `entity_class_name` nor an `entity_class_guid`, so the class-record path
     // below would otherwise yield nothing and the screen would render blank.
-    if let Some(canvas_guid) = mesh.ui_canvas_guid.as_deref()
-        && let Some(mut binding) =
-            super::child_payload::ui_binding_for_building_blocks_canvas(db, canvas_guid)
-    {
-        binding.source_entity_name = mesh
-            .cgf_path
-            .rsplit(['/', '\\'])
-            .next()
-            .and_then(|file| file.strip_suffix(".cgf"))
-            .unwrap_or_default()
-            .to_string();
-        // The floor this transit screen serves (nearest SCTransitDestination,
-        // resolved at socpak parse) — pins `transitdisplay.panelLocation` so
-        // the console's floor-name heading renders (e.g. "SUB DECK").
-        binding.transit_location_loc_key = mesh.ui_location_loc_key.clone();
-        return vec![binding];
-    }
-
     let source = mesh
         .entity_class_name
         .as_ref()
@@ -919,7 +901,27 @@ fn interior_ui_bindings_for_mesh(
                 .to_string();
             Some((record, source_entity_name))
         });
-
+    if let Some(canvas_guid) = mesh.ui_canvas_guid.as_deref()
+        && let Some(mut binding) =
+            super::child_payload::ui_binding_for_building_blocks_canvas(db, canvas_guid)
+    {
+        // The inline canvas overrides the class's content, not what the entity is.
+        binding.source_item_type = source.and_then(|(record, _)| {
+            super::child_payload::entity_record_attach_def_type(db, record)
+        });
+        binding.source_entity_name = mesh
+            .cgf_path
+            .rsplit(['/', '\\'])
+            .next()
+            .and_then(|file| file.strip_suffix(".cgf"))
+            .unwrap_or_default()
+            .to_string();
+        // The floor this transit screen serves (nearest SCTransitDestination,
+        // resolved at socpak parse) — pins `transitdisplay.panelLocation` so
+        // the console's floor-name heading renders (e.g. "SUB DECK").
+        binding.transit_location_loc_key = mesh.ui_location_loc_key.clone();
+        return vec![binding];
+    }
     let Some((record, source_entity_name)) = source else {
         return Vec::new();
     };
@@ -1633,6 +1635,56 @@ mod tests {
         );
     }
 
+    /// Real-P4K regression (scviewer WP-I1): every binding names the item type of the entity whose UI it is
+    /// (`SAttachableComponentParams.AttachDef.Type`), on the class-record path and on the inline-canvas path. The
+    /// Ironclad command-module interior places an `SCItemDisplayScreen` (`89508444-…`, item type `Display`) whose
+    /// inline canvas is the Cutlass countermeasures HUD (`7f9a8776-…`): a consumer must be able to tell it from a door
+    /// panel (`ControlPanel`) without its names. A transit panel has no attachable component: `None`.
+    #[test]
+    fn ui_bindings_carry_the_source_item_type() {
+        let Ok(found) = starbreaker_common::discover::find_p4k() else {
+            eprintln!("skipping: no Data.p4k installed");
+            return;
+        };
+        let p4k = starbreaker_p4k::MappedP4k::open(found.path).unwrap();
+        let dcb = p4k
+            .read_file("Data\\Game2.dcb")
+            .or_else(|_| p4k.read_file("Data\\Game.dcb"))
+            .unwrap();
+        let db = starbreaker_datacore::database::Database::from_bytes(&dcb).unwrap();
+        let mesh = |class_guid: Option<&str>, class_name: Option<&str>, canvas: Option<&str>| crate::types::InteriorMesh {
+            cgf_path: "objects/synthetic/ui_screen_rtt_4x3_a.cgf".into(),
+            material_path: None,
+            transform: glam::Mat4::IDENTITY.to_cols_array_2d(),
+            entity_class_guid: class_guid.map(str::to_string),
+            entity_class_name: class_name.map(str::to_string),
+            tint_palette_name: None,
+            ui_canvas_guid: canvas.map(str::to_string),
+            ui_location_loc_key: None,
+            entity: Default::default(),
+        };
+        // Inline-canvas path: the display screen showing a HUD canvas.
+        let hud = super::interior_ui_bindings_for_mesh(
+            &db,
+            &mesh(Some("89508444-db7a-4f25-9abe-af3cfaa0893f"), None, Some("7f9a8776-1bad-4089-a528-502477f82569")),
+        );
+        assert_eq!(hud.len(), 1);
+        assert_eq!(hud[0].binding_kind, "physical");
+        assert_eq!(hud[0].source_item_type.as_deref(), Some("Display"));
+        // Class-record path: a door panel and a vehicle screen.
+        let door = super::interior_ui_bindings_for_mesh(&db, &mesh(None, Some("ControlPanel_Screen_DoorControl_9x16_Small"), None));
+        assert_eq!(door.len(), 1);
+        assert_eq!(door[0].source_item_type.as_deref(), Some("ControlPanel"));
+        let mfd = super::interior_ui_bindings_for_mesh(&db, &mesh(None, Some("Vehicle_Screen_MFD"), None));
+        assert_eq!(mfd.len(), 1);
+        assert_eq!(mfd[0].binding_kind, "mfd");
+        assert_eq!(mfd[0].source_item_type.as_deref(), Some("Display"));
+        // A transit panel record has no SAttachableComponentParams.
+        let lift = super::interior_ui_bindings_for_mesh(&db, &mesh(None, Some("TransitInteractionUIPanel_Elevator_Ext"), None));
+        assert_eq!(lift.len(), 1);
+        assert_eq!(lift[0].source_item_type, None);
+    }
+
     fn test_ui_binding() -> UiBinding {
         UiBinding {
             binding_kind: String::new(),
@@ -1665,6 +1717,7 @@ mod tests {
             generated_provenance: None,
             generated_confidence: None,
             ui_screen_aspect_w_over_h: None,
+            source_item_type: None,
         }
     }
 

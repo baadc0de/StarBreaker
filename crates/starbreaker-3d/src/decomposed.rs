@@ -2608,6 +2608,7 @@ fn ui_binding_json(binding: &UiBinding) -> serde_json::Value {
         "generated_provenance": binding.generated_provenance,
         "generated_confidence": binding.generated_confidence,
         "ui_screen_aspect_w_over_h": binding.ui_screen_aspect_w_over_h,
+        "source_item_type": binding.source_item_type,
     })
 }
 
@@ -3779,6 +3780,17 @@ mod manufacturer_id_tests {
         assert_eq!(derive_manufacturer_id(""), None);
     }
 
+    /// scviewer WP-I1: `source_item_type` is part of the contract, always present (null when unknown).
+    #[test]
+    fn ui_binding_json_carries_source_item_type() {
+        let mut binding = UiBinding { binding_kind: "physical".into(), ..Default::default() };
+        let json = super::ui_binding_json(&binding);
+        assert!(json.as_object().unwrap().contains_key("source_item_type"));
+        assert!(json["source_item_type"].is_null());
+        binding.source_item_type = Some("ControlPanel".into());
+        assert_eq!(super::ui_binding_json(&binding)["source_item_type"], "ControlPanel");
+    }
+
     #[test]
     fn ui_generated_path_is_structured() {
         let binding = UiBinding {
@@ -3812,6 +3824,7 @@ mod manufacturer_id_tests {
             generated_provenance: None,
             generated_confidence: None,
             ui_screen_aspect_w_over_h: None,
+            source_item_type: None,
         };
 
         assert_eq!(generated_ui_type_segment("Objects/Spaceships/Ships/DRAK/Clipper/exterior/test.cga"), "ship");
