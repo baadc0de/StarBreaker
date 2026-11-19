@@ -1,5 +1,7 @@
-//! Tests of `lift_panel_style`: stop names from the panel links, the door-pad rule, the label style read from IR
-//! (synthetic documents with visibly invented values), and the C2's style from LIVE game data (skipped without it).
+//! Tests of `lift_panel_style`: stop names from the panel links, the door-pad rule, the label style and style source read
+//! from IR, the parts of the style standing alone, a font that cannot spell a name, masks keeping their own paths
+//! (synthetic documents and fonts with visibly invented values), and the C2's style from LIVE game data (skipped
+//! without it).
 
 use serde_json::json;
 
@@ -101,7 +103,79 @@ fn stop_names_come_from_the_panel_interactions_linked_to_each_stop() {
         panel(&[("Call", CARRIAGE, "Request descent from 1")], &[("Call", Some("Call Lift"))]), // a call, not a floor pick
     ];
     let names = stop_display_names(&lift(3), &placements);
-    assert_eq!(names, BTreeMap::from([(0, "Alpha Floor".to_string()), (2, "Beta Floor".to_string())]));
+    assert_eq!(names, BTreeSet::from([(0, "Alpha Floor".to_string()), (2, "Beta Floor".to_string())]));
+}
+
+#[test]
+fn two_panels_may_name_one_stop_differently() {
+    let placements = [
+        panel(&[("Go", CARRIAGE, "From Elevator call 1")], &[("Go", Some("Alpha Floor"))]),
+        panel(&[("Go", CARRIAGE, "From Elevator call 1")], &[("Go", Some("Second Name"))]),
+    ];
+    assert_eq!(
+        stop_display_names(&lift(2), &placements),
+        BTreeSet::from([(1, "Alpha Floor".to_string()), (1, "Second Name".to_string())]),
+        "each name keeps its own label"
+    );
+}
+
+#[test]
+fn the_style_source_is_the_canvas_selected_style() {
+    assert_eq!(style_manufacturer(&json!({ "selected_style_source": "manufacturer:test" })), Some("test"));
+    assert_eq!(style_manufacturer(&json!({ "selected_style_source": "canvas:some_style" })), None);
+    assert_eq!(style_manufacturer(&json!({})), None);
+}
+
+/// A synthetic font with a (shapeless) glyph for each of `chars`: spelling checks codes only.
+fn font_of(chars: &str) -> starbreaker_ui::swf_assets::FontGlyphSet {
+    starbreaker_ui::swf_assets::FontGlyphSet {
+        id: 1,
+        name: "Test".into(),
+        is_bold: false,
+        is_italic: false,
+        ascent: Some(800),
+        descent: Some(200),
+        leading: Some(0),
+        glyphs: chars
+            .chars()
+            .map(|c| starbreaker_ui::swf_assets::FontGlyph { code: Some(c as u16), advance: Some(360), shape_records: vec![] })
+            .collect(),
+    }
+}
+
+#[test]
+fn a_font_without_a_name_s_glyphs_gives_that_name_no_mask() {
+    let font = font_of("AB");
+    assert!(font_spells(&font, "AB BA"), "spaces need no glyph");
+    assert!(!font_spells(&font, "ABC"), "C is missing");
+}
+
+#[test]
+fn the_palette_stands_without_a_label_style() {
+    let binding = UiBinding::default();
+    let source = StyleSource { entity_id: Some("pad"), binding: Some(&binding), palette: Some(("Style.Test".into(), vec![Some([1, 2, 3, 255]), None])) };
+    let names = BTreeSet::from([(0, "Alpha".to_string())]);
+    let (value, files) = build(&lift(2), &names, None, &source, None, |stem| stem.to_string()).expect("the palette alone");
+    assert!(files.is_empty());
+    assert_eq!(value["palette"], json!([{ "role": "Base", "srgba": [1, 2, 3, 255] }]), "unauthored slots left out");
+    assert_eq!(value["labels"], json!([]));
+    let nothing = StyleSource { entity_id: None, binding: None, palette: None };
+    assert!(build(&lift(2), &names, None, &nothing, None, |stem| stem.to_string()).is_none());
+}
+
+#[test]
+fn each_label_keeps_the_path_its_own_mask_was_written_under() {
+    // Two masks whose wanted paths collide (two names that sanitize alike): the writer gives the second another path;
+    // only its own label takes it.
+    let mut value = json!({ "labels": [{ "stop": 0, "image": "same.png" }, { "stop": 1, "image": "same.png" }] });
+    let masks = vec![("same.png".to_string(), vec![1u8]), ("same.png".to_string(), vec![2u8])];
+    let mut written: Vec<Vec<u8>> = Vec::new();
+    attach_masks(&mut value, masks, |path, png| {
+        written.push(png);
+        if written.len() == 1 { path } else { "same-2.png".to_string() }
+    });
+    assert_eq!(value["labels"][0]["image"], "same.png");
+    assert_eq!(value["labels"][1]["image"], "same-2.png");
 }
 
 #[test]
@@ -187,7 +261,7 @@ fn c2_lift_panel_style_from_game_data() {
     let names = stop_display_names(lift, &container.placements);
     assert_eq!(
         names,
-        BTreeMap::from([(0, "Exit Ship".to_string()), (1, "Lower Deck".to_string()), (2, "Top Deck".to_string())])
+        BTreeSet::from([(0, "Exit Ship".to_string()), (1, "Lower Deck".to_string()), (2, "Top Deck".to_string())])
     );
 
     let (pad, binding) = container
@@ -211,10 +285,12 @@ fn c2_lift_panel_style_from_game_data() {
     assert!(label.upper_case, "the pads label in capitals");
 
     let fonts = crate::ui_pipeline::shared_ui_fonts(&p4k).expect("shared fonts");
-    let palette = crate::ui_pipeline::manufacturer_colour_styles(&db, manufacturer.as_deref().unwrap());
+    let rendered_with = style_manufacturer(&ir).expect("the pads render with their manufacturer's style");
+    let palette = crate::ui_pipeline::manufacturer_colour_styles(&db, rendered_with);
     eprintln!("palette: {palette:?}");
-    let source = StyleSource { entity_id: pad.identity.entity_id.as_deref(), binding, palette };
-    let (value, files) = build(lift, &names, &label, &source, &fonts, |stem| format!("Data/UI/Generated/test/{stem}.png")).expect("style");
+    let source = StyleSource { entity_id: pad.identity.entity_id.as_deref(), binding: Some(binding), palette };
+    let (value, files) =
+        build(lift, &names, Some(&label), &source, Some(&fonts), |stem| format!("Data/UI/Generated/test/{stem}.png")).expect("style");
     eprintln!("{}", serde_json::to_string_pretty(&value).unwrap());
     assert_eq!(files.len(), 3);
     let texts: Vec<&str> = value["labels"].as_array().unwrap().iter().map(|l| l["text"].as_str().unwrap()).collect();
