@@ -239,6 +239,70 @@ pub(crate) fn planar_aspect_w_over_h(points: &[[f32; 3]], world_up: [f64; 3]) ->
     Some((width_extent / height_extent) as f32)
 }
 
+/// Whether a submaterial is a render-to-texture display surface: it binds the engine's virtual `$RenderToTexture`
+/// slot (the `render_to_texture` role), whatever its name (`RTT_Screens`, `screen_rtt`, `screen`).
+pub(crate) fn is_render_to_texture_material(material: &crate::mtl::SubMaterial) -> bool {
+    material
+        .semantic_texture_slots()
+        .iter()
+        .any(|slot| slot.is_virtual && slot.role == crate::mtl::TextureSemanticRole::RenderToTexture)
+}
+
+/// TEXTURE-SPACE aspect (width / height) of a mesh's render-to-texture faces: the image aspect that maps onto them
+/// without distortion, `|∂P/∂u| / |∂P/∂v|` averaged over their triangles by area. It follows the faces' UV layout, not
+/// their orientation in the world: a face whose UVs run along its long side takes a landscape image even when it hangs
+/// portrait. `None` when the mesh has no such faces, no UVs, or only degenerate ones.
+pub(crate) fn render_target_texture_aspect(mesh: &Mesh, materials: Option<&MtlFile>) -> Option<f32> {
+    let materials = materials?;
+    let uvs = mesh.uvs.as_ref()?;
+    let (mut sum_u, mut sum_v, mut sum_area) = (0.0f64, 0.0f64, 0.0f64);
+    for submesh in &mesh.submeshes {
+        if !materials
+            .materials
+            .get(submesh.material_id as usize)
+            .is_some_and(is_render_to_texture_material)
+        {
+            continue;
+        }
+        let start = (submesh.first_index as usize).min(mesh.indices.len());
+        let end = start.saturating_add(submesh.num_indices as usize).min(mesh.indices.len());
+        for tri in mesh.indices[start..end].chunks_exact(3) {
+            let (Some(p), Some(t)) = (
+                tri.iter().map(|&i| mesh.positions.get(i as usize).copied()).collect::<Option<Vec<_>>>(),
+                tri.iter().map(|&i| uvs.get(i as usize).copied()).collect::<Option<Vec<_>>>(),
+            ) else {
+                continue;
+            };
+            let e1 = [0, 1, 2].map(|k| (p[1][k] - p[0][k]) as f64);
+            let e2 = [0, 1, 2].map(|k| (p[2][k] - p[0][k]) as f64);
+            let (du1, dv1) = ((t[1][0] - t[0][0]) as f64, (t[1][1] - t[0][1]) as f64);
+            let (du2, dv2) = ((t[2][0] - t[0][0]) as f64, (t[2][1] - t[0][1]) as f64);
+            let det = du1 * dv2 - du2 * dv1;
+            if det.abs() < 1e-12 {
+                continue;
+            }
+            // The triangle's tangent frame: P(u, v) = P0 + Pu·u + Pv·v.
+            let pu = [0, 1, 2].map(|k| (e1[k] * dv2 - e2[k] * dv1) / det);
+            let pv = [0, 1, 2].map(|k| (e2[k] * du1 - e1[k] * du2) / det);
+            let cross = [
+                e1[1] * e2[2] - e1[2] * e2[1],
+                e1[2] * e2[0] - e1[0] * e2[2],
+                e1[0] * e2[1] - e1[1] * e2[0],
+            ];
+            let area = 0.5 * (cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]).sqrt();
+            let len = |v: [f64; 3]| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+            sum_u += area * len(pu);
+            sum_v += area * len(pv);
+            sum_area += area;
+        }
+    }
+    if sum_area <= 1e-12 || sum_v <= 1e-12 {
+        return None;
+    }
+    let aspect = (sum_u / sum_v) as f32;
+    aspect.is_finite().then_some(aspect)
+}
+
 /// Eigenvectors (as `[x, y, z]` rows) of a symmetric 3×3 matrix via cyclic
 /// Jacobi rotations. The covariance matrices here are tiny and well-conditioned,
 /// so a fixed sweep count converges comfortably.
@@ -463,6 +527,55 @@ mod tests {
         assert!((a - 2.0).abs() < 1e-4, "expected 2.0, got {a}");
         // case-insensitive node match
         assert!(ui_screen_aspect(&mesh, Some(&nmc), None, "screen_test").is_some());
+    }
+
+    /// A housing submaterial and a screen with the virtual `$RenderToTexture` slot (synthetic names).
+    fn rtt_materials() -> MtlFile {
+        crate::mtl::parse_mtl(&crate::test_xml::encode(
+            r#"<Material><SubMaterials>
+                 <Material Name="housing" Shader="Illum"><Textures /></Material>
+                 <Material Name="unnamed_glass" Shader="DisplayScreen"><Textures><Texture Map="TexSlot9" File="$RenderToTexture" /></Textures></Material>
+               </SubMaterials></Material>"#,
+        ))
+        .expect("test mtl parses")
+    }
+
+    /// I1-2: the texture-space aspect of the `$RenderToTexture` faces, by their UVs (a 9:16 face whose V runs along
+    /// its long side is portrait; the same face with U along its long side takes a landscape image). The housing
+    /// (another material) is ignored, whatever its UVs; the screen's material name plays no part.
+    #[test]
+    fn render_target_texture_aspect_follows_the_faces_uvs() {
+        let mut mesh = empty_mesh();
+        mesh.positions = vec![
+            // screen quad: 0.09 wide (X), 0.16 tall (Z)
+            [0.0, 0.0, 0.0],
+            [0.09, 0.0, 0.0],
+            [0.09, 0.0, 0.16],
+            [0.0, 0.0, 0.16],
+            // housing quad
+            [0.0, 1.0, 0.0],
+            [5.0, 1.0, 0.0],
+            [5.0, 1.0, 1.0],
+            [0.0, 1.0, 1.0],
+        ];
+        mesh.indices = vec![0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7];
+        let mut screen = submesh("", 0, 6);
+        screen.material_id = 1;
+        let mut housing = submesh("", 0, 6);
+        housing.first_index = 6;
+        mesh.submeshes = vec![screen, housing];
+        let upright = vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0], [0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+        mesh.uvs = Some(upright);
+        let materials = rtt_materials();
+        let a = render_target_texture_aspect(&mesh, Some(&materials)).unwrap();
+        assert!((a - 0.5625).abs() < 1e-4, "portrait UVs: {a}");
+        // Rotated UVs: U runs up the tall side.
+        let rotated = vec![[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+        mesh.uvs = Some(rotated);
+        let a = render_target_texture_aspect(&mesh, Some(&materials)).unwrap();
+        assert!((a - 1.0 / 0.5625).abs() < 1e-3, "rotated UVs: {a}");
+        // No render-to-texture material: nothing to measure.
+        assert_eq!(render_target_texture_aspect(&mesh, None), None);
     }
 
     #[test]

@@ -947,6 +947,13 @@ fn interior_ui_bindings_for_mesh(
         binding.source_kiosk_interaction = source.as_ref().is_some_and(|(record, _)| {
             super::child_payload::entity_record_has_kiosk_interaction(db, record)
         });
+        // An operated UI renders with its owner's values (class user variables with this placement's instance
+        // values, its state machine).
+        if binding.source_kiosk_interaction
+            && let Some((record, _)) = source.as_ref()
+        {
+            super::ui_owner_values::attach_owner_ui_values(db, record, &mesh.entity.overrides.user_variables, &mut binding);
+        }
         binding.source_item_type = source.and_then(|(record, _)| {
             super::child_payload::entity_record_attach_def_type(db, record)
         });
@@ -969,6 +976,9 @@ fn interior_ui_bindings_for_mesh(
     let Some(mut binding) = super::child_payload::ui_binding_for_record(db, record) else {
         return Vec::new();
     };
+    if binding.source_kiosk_interaction && !mesh.entity.overrides.user_variables.is_empty() {
+        super::ui_owner_values::attach_owner_ui_values(db, record, &mesh.entity.overrides.user_variables, &mut binding);
+    }
     binding.source_entity_name = source_entity_name;
     vec![binding]
 }
@@ -1470,6 +1480,37 @@ pub(crate) fn load_interior_mesh_asset(
     }
 }
 
+/// I1-2: measure each UI-bearing interior placement's render-target TEXTURE aspect on its loaded mesh
+/// (`screen_aspect::render_target_texture_aspect`, the `$RenderToTexture` faces' UV layout) and store it on its
+/// bindings that render a screen of the placement itself (`physical`). `mesh_of` returns a unique CGF's loaded mesh
+/// and materials (the decomposed writer's preload). Measured once per unique CGF.
+pub(crate) fn measure_interior_screen_aspects<'m>(
+    interiors: &mut LoadedInteriors,
+    mesh_of: impl Fn(&InteriorCgfEntry) -> Option<(&'m crate::types::Mesh, Option<&'m mtl::MtlFile>)>,
+) {
+    let mut aspects: std::collections::HashMap<usize, Option<f32>> = std::collections::HashMap::new();
+    let mut measured = 0usize;
+    let unique_cgfs = &interiors.unique_cgfs;
+    for container in &mut interiors.containers {
+        for placement in &mut container.placements {
+            if !placement.ui_bindings.iter().any(|b| b.binding_kind == "physical") {
+                continue;
+            }
+            let aspect = *aspects.entry(placement.mesh_index).or_insert_with(|| {
+                unique_cgfs
+                    .get(placement.mesh_index)
+                    .and_then(&mesh_of)
+                    .and_then(|(mesh, materials)| crate::ui_pipeline::screen_aspect::render_target_texture_aspect(mesh, materials))
+            });
+            for binding in placement.ui_bindings.iter_mut().filter(|b| b.binding_kind == "physical") {
+                binding.ui_texture_aspect_w_over_h = aspect;
+                measured += aspect.is_some() as usize;
+            }
+        }
+    }
+    log::info!("interior screen texture aspects: {measured} bindings over {} meshes", aspects.len());
+}
+
 pub(crate) fn preload_interior_meshes(
     interiors: &LoadedInteriors,
     p4k: &MappedP4k,
@@ -1778,6 +1819,10 @@ mod tests {
             source_item_type: None,
             source_owner_resolved: false,
             source_kiosk_interaction: false,
+            ui_texture_aspect_w_over_h: None,
+            user_variables: Vec::new(),
+            state_types: Vec::new(),
+            state_images: Vec::new(),
         }
     }
 

@@ -112,3 +112,39 @@ fn swf_immediate_subdirs_empty_prefix_returns_nothing() {
         "empty prefix must enumerate nothing, not every top-level dir: {dirs:?}"
     );
 }
+
+/// I1-5: a render's owner values: user variables by name (a localization key localized, as the engine pushes it) and,
+/// for a state render, the named state type's `state.<type>.<state>` booleans. Synthetic names.
+#[test]
+fn binding_values_carry_user_variables_and_one_state_type() {
+    use crate::types::{UiBinding, UiStateType, UiUserValue, UiUserVariable};
+    use starbreaker_ui::canvas::Value;
+    let binding = UiBinding {
+        user_variables: vec![
+            UiUserVariable { name: "b".into(), value: UiUserValue::Bool(true) },
+            UiUserVariable { name: "l".into(), value: UiUserValue::Loc("@Test_Key".into()) },
+        ],
+        state_types: vec![UiStateType {
+            name: "TypeA".into(),
+            states: vec!["A0".into(), "A1".into()],
+            default_state: "A0".into(),
+        }],
+        ..Default::default()
+    };
+    let loc = std::collections::HashMap::from([("test_key".to_string(), "localized".to_string())]);
+    let default = crate::ui_pipeline::ui_binding_values(&binding, None, &loc);
+    assert_eq!(
+        default,
+        [
+            ("b".to_string(), Value::Bool(true)),
+            ("l".to_string(), Value::Str("localized".into())),
+            ("state.TypeA.A0".to_string(), Value::Bool(true)),
+            ("state.TypeA.A1".to_string(), Value::Bool(false)),
+        ]
+    );
+    let a1 = crate::ui_pipeline::ui_binding_values(&binding, Some(("TypeA", "A1")), &loc);
+    assert_eq!(a1[2..], [
+        ("state.TypeA.A0".to_string(), Value::Bool(false)),
+        ("state.TypeA.A1".to_string(), Value::Bool(true)),
+    ]);
+}

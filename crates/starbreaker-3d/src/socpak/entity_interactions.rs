@@ -123,6 +123,24 @@ pub(crate) fn overrides(xml: &CryXml, entity: &CryXmlNode) -> EntityOverrides {
             }
         }
     }
+    // User-variable instance values, by array and `__index` (the arrays' entries carry `defaultValue`).
+    if let Some(variables) = component(xml, entity, "UserVariablesComponentParams") {
+        for array in children(xml, variables) {
+            let array_name = xml.node_tag(array);
+            for entry in children(xml, array) {
+                let (Some(index), Some(value)) =
+                    (attr(xml, entry, "__index").and_then(|i| i.parse().ok()), attr(xml, entry, "defaultValue"))
+                else {
+                    continue;
+                };
+                out.user_variables.push(crate::types::UserVariableOverride {
+                    array: array_name.to_string(),
+                    index,
+                    value: value.to_string(),
+                });
+            }
+        }
+    }
     if let Some(tree) = component(xml, entity, "SEntityTraversingTreeParams")
         && let Some(nodes) = child(xml, tree, "TraversingNodes")
     {

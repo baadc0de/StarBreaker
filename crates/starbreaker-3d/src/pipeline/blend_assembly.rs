@@ -834,7 +834,7 @@ fn decal_face_indices_for_mesh(mesh: &Mesh, mesh_with_decals: &MeshWithDecals) -
 pub fn write_decomposed_export_blend(
     db: &Database<'_>,
     p4k: &MappedP4k,
-    input: DecomposedInput,
+    mut input: DecomposedInput,
     opts: &ExportOptions,
     progress: Option<&Progress>,
     existing_asset_paths: Option<&HashSet<String>>,
@@ -939,6 +939,15 @@ pub fn write_decomposed_export_blend(
             )
         })
         .collect();
+    // I1-2: each UI-bearing placement renders at its faces' texture-space aspect, measured on the preloaded meshes
+    // before the decomposed writer pre-renders the UI.
+    super::interiors::measure_interior_screen_aspects(&mut input.interiors, |entry| {
+        let key = crate::decomposed::interior_asset_lookup_key(&entry.cgf_path, entry.material_path.as_deref());
+        preloaded_interior_mesh_map
+            .get(&key)
+            .and_then(|loaded| loaded.as_ref())
+            .map(|(mesh, materials, _)| (mesh, materials.as_ref()))
+    });
 
     // Pre-decode all source textures in parallel before the serial decomposed
     // writer runs. Collect each asset's (materials, material_path, geometry_path)

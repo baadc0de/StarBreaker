@@ -287,6 +287,29 @@ fn door_speed_override_is_read_by_component_type() {
     assert_eq!(meshes[0].entity.overrides.use_auto_close_delay, None);
 }
 
+/// scviewer WP-I1 I1-5: a placement's `EntityComponentUserVariables` instance values are read by array and `__index`
+/// (the C2 door pads in `top_deck_c2` set bools 0, 2, 4 and 5 to 1 on `ControlPanel_Screen_DoorControl_9x16_Small`).
+#[test]
+fn user_variable_instance_values_are_read_by_array_and_index() {
+    let bytes = crate::test_xml::encode(
+        r#"<Entities><Entity Name="pad" EntityClassGUID="11110000-0000-0000-0000-000000000002" EntityCryGUID="aaaa0000-0000-0000-0000-000000000002">
+             <PropertiesDataCore>
+               <EntityComponentUserVariables __type="UserVariablesComponentParams">
+                 <bools __fullyInstanced="0">
+                   <BoolUserVariable __index="0" __type="BoolUserVariable" defaultValue="1" />
+                   <BoolUserVariable __index="4" __type="BoolUserVariable" defaultValue="1" />
+                 </bools>
+                 <locStrings><LocStringUserVariable __index="1" defaultValue="@test_key" /></locStrings>
+               </EntityComponentUserVariables>
+             </PropertiesDataCore>
+           </Entity></Entities>"#,
+    );
+    let meshes = extract_cryxml_entities(&starbreaker_cryxml::from_bytes(&bytes).unwrap()).0;
+    let o = &meshes[0].entity.overrides.user_variables;
+    let read: Vec<(&str, usize, &str)> = o.iter().map(|o| (o.array.as_str(), o.index, o.value.as_str())).collect();
+    assert_eq!(read, [("bools", 0, "1"), ("bools", 4, "1"), ("locStrings", 1, "@test_key")]);
+}
+
 /// Root container `ItemPort`s describe the entities attached to them; an entity that names its port in
 /// `TileAttachmentParams` is that port's occupant and, once placed, is not placed a second time from the port. The C2's
 /// port 5 put a second, static carriage one metre below the hold (at the port's `interactionOffset`). A port whose

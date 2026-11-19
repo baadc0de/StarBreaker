@@ -152,15 +152,21 @@ fn run_render(
             continue;
         }
 
-        match starbreaker_3d::ui_pipeline::render_ui_binding_png(&binding, &db, &p4k, texture_mip, manufacturer_id.as_deref(), &loc_data, &ship_data, None, root_entity_name.as_deref()) {
+        // The default render, then the owner states the export rendered (`state_images`), as the export renders them.
+        let states: Vec<Option<(&str, &str)>> = std::iter::once(None)
+            .chain(binding.state_images.iter().map(|s| Some((s.state_type.as_str(), s.state.as_str()))))
+            .collect();
+        for state in states {
+        match starbreaker_3d::ui_pipeline::render_ui_binding_png(&binding, state, &db, &p4k, texture_mip, manufacturer_id.as_deref(), &loc_data, &ship_data, None, root_entity_name.as_deref()) {
             Ok(png_bytes) => {
-                let file_name = png_name_for_binding(binding, texture_mip);
+                let file_name = png_name_for_binding(binding, state, texture_mip);
                 let dest = out_dir.join(&file_name);
                 std::fs::write(&dest, &png_bytes)?;
                 eprintln!("  wrote  {}", dest.display());
                 if let Some(dump_ir_dir) = dump_ir_dir {
                     let ir_json = starbreaker_3d::ui_pipeline::compile_ui_binding_ir_json(
                         binding,
+                        state,
                         &db,
                         &p4k,
                         texture_mip,
@@ -179,6 +185,7 @@ fn run_render(
                 eprintln!("  failed {:?}: {}", binding.helper_name, e);
                 failed += 1;
             }
+        }
         }
     }
 
@@ -291,6 +298,13 @@ fn parse_ui_binding(v: &Value) -> Option<UiBinding> {
             .get("source_kiosk_interaction")
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
+        ui_texture_aspect_w_over_h: obj
+            .get("ui_texture_aspect_w_over_h")
+            .and_then(|v| v.as_f64())
+            .map(|n| n as f32),
+        user_variables: obj.get("user_variables").cloned().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default(),
+        state_types: obj.get("state_types").cloned().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default(),
+        state_images: obj.get("state_images").cloned().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default(),
     })
 }
 
@@ -298,7 +312,7 @@ fn parse_ui_binding(v: &Value) -> Option<UiBinding> {
 /// one (e.g. the medical bed) fall back to the human-readable content/canvas
 /// record name before the GUID, so replay outputs are findable without a
 /// content-match hunt (ledger item 31).
-fn png_name_for_binding(binding: &UiBinding, mip: u32) -> String {
+fn png_name_for_binding(binding: &UiBinding, state: Option<(&str, &str)>, mip: u32) -> String {
     let base = binding
         .helper_name
         .as_deref()
@@ -311,7 +325,10 @@ fn png_name_for_binding(binding: &UiBinding, mip: u32) -> String {
         .chars()
         .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' { c } else { '_' })
         .collect();
-    format!("{safe}_TEX{mip}.png")
+    match state {
+        Some((state_type, state)) => format!("{safe}__{state_type}_{state}_TEX{mip}.png"),
+        None => format!("{safe}_TEX{mip}.png"),
+    }
 }
 
 #[cfg(test)]
@@ -330,15 +347,15 @@ mod tests {
     #[test]
     fn png_name_prefers_helper_then_content_record_name_then_guid() {
         let helper = binding_with(Some("Screen_Annunciator_L"), Some("BuildingBlocks_Canvas.X"), Some("guid-1"));
-        assert_eq!(png_name_for_binding(&helper, 0), "Screen_Annunciator_L_TEX0.png");
+        assert_eq!(png_name_for_binding(&helper, None, 0), "Screen_Annunciator_L_TEX0.png");
 
         let content = binding_with(None, Some("BuildingBlocks_Canvas.I_Med_MedicalBed_A"), Some("guid-1"));
         assert_eq!(
-            png_name_for_binding(&content, 0),
+            png_name_for_binding(&content, None, 0),
             "BuildingBlocks_Canvas.I_Med_MedicalBed_A_TEX0.png"
         );
 
         let guid_only = binding_with(None, None, Some("534bab84-299b"));
-        assert_eq!(png_name_for_binding(&guid_only, 0), "534bab84-299b_TEX0.png");
+        assert_eq!(png_name_for_binding(&guid_only, None, 0), "534bab84-299b_TEX0.png");
     }
 }

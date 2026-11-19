@@ -862,6 +862,59 @@ pub struct UiBinding {
     /// Whether that entity has a `KioskInteractionEntityComponentParams` component: the player operates its UI (door and
     /// light panels, transit panels, ship-selector and freight kiosks), unlike a display only shown (MFDs, HUDs, signage).
     pub source_kiosk_interaction: bool,
+    /// Aspect (width / height) at which the render target lands undistorted on the entity's display faces, measured in
+    /// texture space on its `$RenderToTexture` faces (`ui_pipeline::screen_aspect::render_target_texture_aspect`).
+    /// Measured for interior placements (door and light pads, transit panels); sizes the render (part of its identity).
+    pub ui_texture_aspect_w_over_h: Option<f32>,
+    /// The UI owner's user variables (`UserVariablesComponentParams`): class defaults with the placement's `.soc`
+    /// instance overrides (`EntityComponentUserVariables`, by `__index`). The canvas binds them by name (a door pad's
+    /// `ui_HideLockControls`, `ui_LocationName`); part of the render identity.
+    pub user_variables: Vec<UiUserVariable>,
+    /// The UI owner's interaction state machine (`SInteractionStateMachineParams`, `bindingsMethod = States`): the
+    /// canvas binds `state.<type>.<state>`. The default render pins every type's default state; `state_images` holds
+    /// the renders of the other states the canvas binds.
+    pub state_types: Vec<UiStateType>,
+    /// Renders of the owner's other states (one state type away from the default), written by the exporter for the
+    /// states the canvas binds and whose image differs from the default render.
+    pub state_images: Vec<UiStateImage>,
+}
+
+/// One user variable of a UI owner entity (`UserVariablesComponentParams`).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct UiUserVariable {
+    pub name: String,
+    pub value: UiUserValue,
+}
+
+/// A user variable's value, by its `UserVariablesComponentParams` array (`bools`, `ints`, `floats`, `strings`,
+/// `locStrings`). A localization key stays a key here; the render localizes it, as the engine pushes the string.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+pub enum UiUserValue {
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    String(String),
+    Loc(String),
+}
+
+/// One state type of a UI owner's interaction state machine.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct UiStateType {
+    /// `StateTypeName` (`DoorOpenState`).
+    pub name: String,
+    /// `States[].StateName`, in authored order.
+    pub states: Vec<String>,
+    /// The type's `DefaultState`, else its first state.
+    pub default_state: String,
+}
+
+/// A render of one non-default state (`ui_bindings[].state_images[]`).
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct UiStateImage {
+    pub state_type: String,
+    pub state: String,
+    pub generated_image_path: String,
 }
 
 pub struct EntityPayload {
@@ -1188,6 +1241,20 @@ pub struct EntityOverrides {
     /// Points whose `Interactions` the instance replaces with entries (not
     /// applied: reported, the class's are exported).
     pub replaced_interaction_points: Vec<usize>,
+    /// `UserVariablesComponentParams` instance values (`EntityComponentUserVariables`), in authored order: they
+    /// replace the class's user variables by array and `__index` (a door pad hiding its lock controls).
+    pub user_variables: Vec<UserVariableOverride>,
+}
+
+/// One instance value of a `UserVariablesComponentParams` array.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct UserVariableOverride {
+    /// The array (`bools`, `ints`, `floats`, `strings`, `locStrings`).
+    pub array: String,
+    /// `__index` into the class's array.
+    pub index: usize,
+    /// The authored `defaultValue` text.
+    pub value: String,
 }
 
 /// A path node's accessibility (`AccessibilityBaseParams` subtype).

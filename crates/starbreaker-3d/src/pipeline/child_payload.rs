@@ -617,7 +617,19 @@ pub(crate) fn entity_record_attach_def_type(
         .filter(|attach_def_type| !attach_def_type.is_empty())
 }
 
+/// The UI binding of an entity class record. A UI the player operates (`source_kiosk_interaction`: door, light and
+/// transit panels, kiosks) also carries its owner's values (user variables, state types; `ui_owner_values`), which the
+/// render pins; a display only shown (MFDs, HUDs) renders as before. Instance overrides are applied by the interior
+/// placement path.
 pub(crate) fn ui_binding_for_record(db: &Database, record: &Record) -> Option<UiBinding> {
+    let mut binding = ui_binding_for_record_base(db, record)?;
+    if binding.source_kiosk_interaction {
+        super::ui_owner_values::attach_owner_ui_values(db, record, &[], &mut binding);
+    }
+    Some(binding)
+}
+
+fn ui_binding_for_record_base(db: &Database, record: &Record) -> Option<UiBinding> {
     let owner_source_file =
         query_string_path(db, record, "Components[UIOwnerEntityComponentParams].element.sourceFile");
     let runtime_image_source = query_string_path(
@@ -675,6 +687,10 @@ pub(crate) fn ui_binding_for_record(db: &Database, record: &Record) -> Option<Ui
                 source_item_type: entity_record_attach_def_type(db, record),
                 source_owner_resolved: true,
                 source_kiosk_interaction: entity_record_has_kiosk_interaction(db, record),
+                ui_texture_aspect_w_over_h: None,
+                user_variables: Vec::new(),
+                state_types: Vec::new(),
+                state_images: Vec::new(),
             });
         }
     }
@@ -730,6 +746,10 @@ pub(crate) fn ui_binding_for_record(db: &Database, record: &Record) -> Option<Ui
                 source_item_type: entity_record_attach_def_type(db, record),
                 source_owner_resolved: true,
                 source_kiosk_interaction: entity_record_has_kiosk_interaction(db, record),
+                ui_texture_aspect_w_over_h: None,
+                user_variables: Vec::new(),
+                state_types: Vec::new(),
+                state_images: Vec::new(),
             });
         }
     }
@@ -882,6 +902,10 @@ pub(crate) fn ui_binding_for_record(db: &Database, record: &Record) -> Option<Ui
         source_item_type: entity_record_attach_def_type(db, record),
         source_owner_resolved: true,
         source_kiosk_interaction: entity_record_has_kiosk_interaction(db, record),
+        ui_texture_aspect_w_over_h: None,
+        user_variables: Vec::new(),
+        state_types: Vec::new(),
+        state_images: Vec::new(),
     })
 }
 

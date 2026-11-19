@@ -99,6 +99,7 @@ pub fn build_default_registry(
 /// than propagating.
 pub fn render_ui_binding_png(
     binding: &UiBinding,
+    state: Option<(&str, &str)>,
     db: &Database<'_>,
     p4k: &MappedP4k,
     texture_mip: u32,
@@ -110,6 +111,7 @@ pub fn render_ui_binding_png(
 ) -> Result<Vec<u8>, String> {
     let t_ui = std::env::var("SB_UI_TIMING").ok().map(|_| std::time::Instant::now());
     let canvas_fetcher = DatacoreCanvasFetcher::new(db);
+    let binding_values = ui_binding_values(binding, state, &loc_data.map);
     let hologram_fetcher = P4kHologramFetcher {
         p4k,
         db,
@@ -128,6 +130,8 @@ pub fn render_ui_binding_png(
         transit_location_loc_key: binding.transit_location_loc_key.as_deref(),
         host_swf_path: binding.owner_source_file.as_deref(),
         screen_aspect_w_over_h: binding.ui_screen_aspect_w_over_h,
+        texture_aspect_w_over_h: binding.ui_texture_aspect_w_over_h,
+        binding_values: &binding_values,
     };
     let effective_guid = binding
         .content_canvas_guid
@@ -197,6 +201,7 @@ pub fn render_ui_binding_png(
 /// inputs as [`render_ui_binding_png`].
 pub fn compile_ui_binding_ir_json(
     binding: &UiBinding,
+    state: Option<(&str, &str)>,
     db: &Database<'_>,
     p4k: &MappedP4k,
     texture_mip: u32,
@@ -205,6 +210,7 @@ pub fn compile_ui_binding_ir_json(
     ship_data: &UiShipData,
 ) -> Result<String, String> {
     let canvas_fetcher = DatacoreCanvasFetcher::new(db);
+    let binding_values = ui_binding_values(binding, state, &loc_data.map);
     let view = UiBindingView {
         canvas_guid: binding.canvas_guid.as_deref(),
         content_canvas_guid: binding.content_canvas_guid.as_deref(),
@@ -217,6 +223,8 @@ pub fn compile_ui_binding_ir_json(
         transit_location_loc_key: binding.transit_location_loc_key.as_deref(),
         host_swf_path: binding.owner_source_file.as_deref(),
         screen_aspect_w_over_h: binding.ui_screen_aspect_w_over_h,
+        texture_aspect_w_over_h: binding.ui_texture_aspect_w_over_h,
+        binding_values: &binding_values,
     };
     let effective_guid = binding
         .content_canvas_guid
@@ -251,6 +259,97 @@ pub fn compile_ui_binding_ir_json(
     let _ = texture_mip;
     let ir = starbreaker_ui::pipeline::compile_ir_for_binding(&inputs).map_err(|e| e.to_string())?;
     serde_json::to_string_pretty(&ir).map_err(|e| e.to_string())
+}
+
+/// The `state.*` binding paths (lower case) `binding`'s canvas reads: its own operations' `binding`s and those of every
+/// canvas it embeds (`canvas` references, followed once each). Which of its owner's state types the canvas shows.
+pub(crate) fn canvas_state_paths(binding: &UiBinding, db: &Database<'_>) -> std::collections::BTreeSet<String> {
+    let fetcher = DatacoreCanvasFetcher::new(db);
+    let mut paths = std::collections::BTreeSet::new();
+    let Some(root) = binding
+        .content_canvas_guid
+        .as_deref()
+        .filter(|g| !g.is_empty())
+        .or_else(|| binding.canvas_guid.as_deref().filter(|g| !g.is_empty()))
+        .and_then(|guid| fetcher.fetch_canvas_json(guid).ok())
+    else {
+        return paths;
+    };
+    let mut seen = std::collections::HashSet::new();
+    let mut stack = vec![root];
+    while let Some(canvas) = stack.pop() {
+        let mut refs = Vec::new();
+        collect_state_paths(&canvas, &mut paths, &mut refs);
+        for reference in refs {
+            if seen.insert(reference.to_ascii_lowercase())
+                && let Ok(child) = fetcher.fetch_canvas_by_path(&reference)
+            {
+                stack.push(child);
+            }
+        }
+    }
+    paths
+}
+
+fn collect_state_paths(value: &serde_json::Value, paths: &mut std::collections::BTreeSet<String>, refs: &mut Vec<String>) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, v) in map {
+                match (key.as_str(), v.as_str()) {
+                    ("binding", Some(path)) if path.to_ascii_lowercase().starts_with("state.") => {
+                        paths.insert(path.to_ascii_lowercase());
+                    }
+                    ("canvas", Some(reference)) if reference.ends_with(".json") => refs.push(reference.to_string()),
+                    _ => collect_state_paths(v, paths, refs),
+                }
+            }
+        }
+        serde_json::Value::Array(items) => items.iter().for_each(|v| collect_state_paths(v, paths, refs)),
+        _ => {}
+    }
+}
+
+/// The engine values `binding`'s owner pushes into its canvas for one render (`UiBindingView::binding_values`): its
+/// user variables by name (a localization key localized through `loc`, as the engine pushes the string; an unknown
+/// key stays the key) and every state type's `state.<type>.<state>` booleans: each type in its default state, except
+/// the type `state = Some((type, state))` names, in that state. `None`: the default render (every type at rest).
+pub(crate) fn ui_binding_values(
+    binding: &UiBinding,
+    state: Option<(&str, &str)>,
+    loc: &HashMap<String, String>,
+) -> Vec<(String, starbreaker_ui::canvas::Value)> {
+    use crate::types::UiUserValue;
+    use starbreaker_ui::canvas::Value;
+    let mut values: Vec<(String, Value)> = binding
+        .user_variables
+        .iter()
+        .map(|variable| {
+            let value = match &variable.value {
+                UiUserValue::Bool(v) => Value::Bool(*v),
+                UiUserValue::Int(v) => Value::Int(*v),
+                UiUserValue::Float(v) => Value::Float(*v),
+                UiUserValue::String(v) => Value::Str(v.clone()),
+                UiUserValue::Loc(key) => Value::Str(
+                    loc.get(&key.trim_start_matches('@').to_ascii_lowercase())
+                        .cloned()
+                        .unwrap_or_else(|| key.clone()),
+                ),
+            };
+            (variable.name.clone(), value)
+        })
+        .collect();
+    // Every state type sits in its default state, except the one `state` names: the engine pushes one boolean per
+    // state, the current one true (a door pad at rest is DoorClosed, DoorUnlocked, PowerNormal, ...).
+    for ty in &binding.state_types {
+        let active = match state {
+            Some((state_type, state)) if state_type == ty.name => state,
+            _ => ty.default_state.as_str(),
+        };
+        for name in &ty.states {
+            values.push((format!("state.{}.{}", ty.name, name), Value::Bool(name == active)));
+        }
+    }
+    values
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

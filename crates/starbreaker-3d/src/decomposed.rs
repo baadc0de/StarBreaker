@@ -1229,7 +1229,7 @@ pub(crate) fn write_decomposed_export(
     // re-use a small set of screens). Built before the child/interior loops so
     // both consume the same cache; the loops then look up renders instead of
     // rendering. See `prerender_ui_bindings`.
-    let ui_render_cache: HashMap<UiRenderKey, Result<Vec<u8>, String>> =
+    let ui_render_cache: UiRenders =
         match (ui_loc_data.as_ref(), ui_defaults_registry.as_ref()) {
             (Some(loc_data), Some(defaults_registry)) => {
                 let render_start = Instant::now();
@@ -1257,11 +1257,11 @@ pub(crate) fn write_decomposed_export(
                     "[timing][decomposed] prerender_ui: {:.2}s ({} bindings, {} unique)",
                     render_start.elapsed().as_secs_f32(),
                     all_bindings.len(),
-                    cache.len(),
+                    cache.renders.len(),
                 );
                 cache
             }
-            _ => HashMap::new(),
+            _ => UiRenders::default(),
         };
     let mut texture_cache: HashMap<(String, TextureFlavor, TextureContainer), String> = HashMap::new();
     // Memo for the DDNA→roughness derivation (exported ref + status metadata);
@@ -1487,7 +1487,7 @@ pub(crate) fn write_decomposed_export(
         let defaults_registry = ui_defaults_registry
             .as_ref()
             .expect("default registry must be built when UI bindings are present");
-        let rendered: Vec<(usize, UiBinding, Option<(String, Vec<u8>)>)> = child_ui_jobs
+        let rendered: Vec<(usize, UiBinding, Vec<(String, Vec<u8>)>)> = child_ui_jobs
             .par_iter()
             .map(|(child_index, binding)| {
                 let (binding, file_record) = generated_ui_binding_record(
@@ -1511,9 +1511,7 @@ pub(crate) fn write_decomposed_export(
         // each child's bindings (and Some(file_record)s) in their original order.
         for (child_index, binding, file_record) in rendered {
             let entry = &mut precomputed_child_ui[child_index];
-            if let Some(file_record) = file_record {
-                entry.1.push(file_record);
-            }
+            entry.1.extend(file_record);
             entry.0.push(binding);
         }
     }
@@ -2624,6 +2622,10 @@ fn ui_binding_json(binding: &UiBinding) -> serde_json::Value {
         "source_item_type": binding.source_item_type,
         "source_owner_resolved": binding.source_owner_resolved,
         "source_kiosk_interaction": binding.source_kiosk_interaction,
+        "ui_texture_aspect_w_over_h": binding.ui_texture_aspect_w_over_h,
+        "user_variables": binding.user_variables,
+        "state_types": binding.state_types,
+        "state_images": binding.state_images,
     })
 }
 
@@ -3453,15 +3455,17 @@ fn generated_ui_binding_record(
     loc_data: &crate::ui_pipeline::UiLocData,
     defaults_registry: &starbreaker_ui::DefaultValueRegistry,
     ship_data: &crate::ui_pipeline::UiShipData,
-    render_cache: &HashMap<UiRenderKey, Result<Vec<u8>, String>>,
-) -> (UiBinding, Option<(String, Vec<u8>)>) {
+    render_cache: &UiRenders,
+) -> (UiBinding, Vec<(String, Vec<u8>)>) {
     let mut binding = binding.clone();
+    let key = ui_render_key(&binding, None);
     // Reuse the pre-rendered image for this screen if available (most screens
     // recur across placements/children); otherwise render live.
-    let render_result = match render_cache.get(&ui_render_key(&binding)) {
+    let render_result = match render_cache.renders.get(&key) {
         Some(result) => result.clone(),
         None => crate::ui_pipeline::render_ui_binding_png(
             &binding,
+            None,
             db,
             p4k,
             texture_mip,
@@ -3474,13 +3478,38 @@ fn generated_ui_binding_record(
     };
     match render_result {
         Ok(png_bytes) => {
-            let export_path = generated_ui_binding_path(
-                root_entity_name,
-                root_geometry_path,
-                root_manufacturer_id,
-                &binding,
-            );
-            let file_record = Some((export_path.clone(), png_bytes));
+            let stem = render_cache.stem(&key, &binding);
+            let export_path =
+                generated_ui_binding_path_for_stem(root_entity_name, root_geometry_path, root_manufacturer_id, &stem);
+            // The owner's other states the canvas shows (one state type away from the default; I1-3): a render that
+            // equals the default shows nothing the default does not, and is not written.
+            let mut file_record = Vec::new();
+            for (state_type, state) in render_cache.states.get(&key).into_iter().flatten() {
+                let state_key = ui_render_key(&binding, Some((state_type, state)));
+                match render_cache.renders.get(&state_key) {
+                    Some(Ok(state_png)) if *state_png != png_bytes => {
+                        let path = generated_ui_binding_path_for_stem(
+                            root_entity_name,
+                            root_geometry_path,
+                            root_manufacturer_id,
+                            &state_image_stem(&stem, state_type, state),
+                        );
+                        file_record.push((path.clone(), state_png.clone()));
+                        binding.state_images.push(crate::types::UiStateImage {
+                            state_type: state_type.clone(),
+                            state: state.clone(),
+                            generated_image_path: path,
+                        });
+                    }
+                    Some(Ok(_)) => {}
+                    Some(Err(e)) => log::warn!(
+                        "ui render failed for {:?} state {state_type}.{state}: {e}",
+                        binding.helper_name.as_deref().unwrap_or(&binding.source_entity_name)
+                    ),
+                    None => {}
+                }
+            }
+            file_record.insert(0, (export_path.clone(), png_bytes));
             binding.generated_image_path = Some(export_path);
             binding.generated_context_manifest_path = Some(scene_manifest_path.to_string());
             let selected_style_source = root_manufacturer_id
@@ -3569,7 +3598,7 @@ fn generated_ui_binding_record(
                 "ui render failed for helper {:?} (kind {}): {}",
                 binding.helper_name, binding.binding_kind, e
             );
-            (binding, None)
+            (binding, Vec::new())
         }
     }
 }
@@ -3586,7 +3615,7 @@ fn generate_ui_binding_records_detached(
     loc_data: Option<&crate::ui_pipeline::UiLocData>,
     defaults_registry: Option<&starbreaker_ui::DefaultValueRegistry>,
     ship_data: &crate::ui_pipeline::UiShipData,
-    render_cache: &HashMap<UiRenderKey, Result<Vec<u8>, String>>,
+    render_cache: &UiRenders,
 ) -> (Vec<UiBinding>, Vec<(String, Vec<u8>)>) {
     // Most interior placements carry no UI bindings; skip all binding work for
     // them entirely.
@@ -3628,26 +3657,41 @@ fn generate_ui_binding_records_detached(
     let mut ui_bindings = Vec::with_capacity(generated.len());
     let mut file_records = Vec::new();
     for (_, binding, file_record) in generated {
-        if let Some(file_record) = file_record {
-            file_records.push(file_record);
-        }
+        file_records.extend(file_record);
         ui_bindings.push(binding);
     }
     (ui_bindings, file_records)
 }
 
+/// The default path of `binding`'s render (the export assigns stems through `UiRenders::stem`).
+#[cfg(test)]
 fn generated_ui_binding_path(
     root_entity_name: &str,
     root_geometry_path: &str,
     root_manufacturer_id: Option<&str>,
     binding: &UiBinding,
 ) -> String {
+    generated_ui_binding_path_for_stem(
+        root_entity_name,
+        root_geometry_path,
+        root_manufacturer_id,
+        &generated_ui_asset_name(binding),
+    )
+}
+
+/// [`generated_ui_binding_path`] for an explicit file stem (`UiRenders::stem`: render identities that share an asset
+/// name get distinct files).
+fn generated_ui_binding_path_for_stem(
+    root_entity_name: &str,
+    root_geometry_path: &str,
+    root_manufacturer_id: Option<&str>,
+    asset_name: &str,
+) -> String {
     let ui_type = generated_ui_type_segment(root_geometry_path);
     let manufacturer = root_manufacturer_id
         .map(sanitize_identifier)
         .unwrap_or_else(|| "unknown".to_string());
     let ship_name = generated_ui_ship_name(root_entity_name, root_manufacturer_id);
-    let asset_name = generated_ui_asset_name(binding);
     format!(
         "Data/UI/Generated/{ui_type}/{manufacturer}/{ship_name}/{asset_name}.png"
     )
@@ -3846,6 +3890,10 @@ mod manufacturer_id_tests {
             source_item_type: None,
             source_owner_resolved: false,
             source_kiosk_interaction: false,
+            ui_texture_aspect_w_over_h: None,
+            user_variables: Vec::new(),
+            state_types: Vec::new(),
+            state_images: Vec::new(),
         };
 
         assert_eq!(generated_ui_type_segment("Objects/Spaceships/Ships/DRAK/Clipper/exterior/test.cga"), "ship");
@@ -5075,85 +5123,6 @@ fn texture_load_keys_from_materials(materials: &MtlFile) -> Vec<(String, Texture
         }
     }
     keys
-}
-
-/// Identity of a UI binding's rendered image. Two bindings with equal
-/// `UiRenderKey` produce byte-identical PNGs within one export, because the
-/// render depends only on these `UiBindingView` fields — every other input
-/// (localization, ship data, manufacturer, root entity) is constant per export.
-/// `f32` aspect is stored as raw bits so the key is `Hash + Eq`.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct UiRenderKey {
-    canvas_guid: Option<String>,
-    content_canvas_guid: Option<String>,
-    binding_kind: String,
-    helper_name: Option<String>,
-    dashboard_view_index: Option<u32>,
-    dashboard_screen_slot: Option<u32>,
-    screen_name_loc_key: Option<String>,
-    /// Per-floor transit location: two lift-call consoles on different floors
-    /// render different headings, so the loc key is part of render identity.
-    transit_location_loc_key: Option<String>,
-    owner_source_file: Option<String>,
-    screen_aspect_bits: Option<u32>,
-}
-
-/// Build the render-identity key for `binding` (see [`UiRenderKey`]).
-fn ui_render_key(binding: &UiBinding) -> UiRenderKey {
-    UiRenderKey {
-        canvas_guid: binding.canvas_guid.clone(),
-        content_canvas_guid: binding.content_canvas_guid.clone(),
-        binding_kind: binding.binding_kind.clone(),
-        helper_name: binding.helper_name.clone(),
-        dashboard_view_index: binding.dashboard_view_index,
-        dashboard_screen_slot: binding.dashboard_screen_slot,
-        screen_name_loc_key: binding.screen_name_loc_key.clone(),
-        transit_location_loc_key: binding.transit_location_loc_key.clone(),
-        owner_source_file: binding.owner_source_file.clone(),
-        screen_aspect_bits: binding.ui_screen_aspect_w_over_h.map(f32::to_bits),
-    }
-}
-
-/// Render each DISTINCT UI binding once, in parallel, returning a map from
-/// render key to the rendered PNG (or the render error). Bindings that share a
-/// [`UiRenderKey`] render identically, so a representative is rendered once and
-/// every instance reuses the result. This collapses the per-instance render
-/// work (hundreds of screens, mostly duplicates) to one render per unique
-/// screen. Output is unchanged: the per-binding record builder still computes
-/// each binding's own export path and provenance.
-fn prerender_ui_bindings(
-    bindings: &[&UiBinding],
-    db: &Database<'_>,
-    p4k: &MappedP4k,
-    texture_mip: u32,
-    root_entity_name: &str,
-    root_manufacturer_id: Option<&str>,
-    loc_data: &crate::ui_pipeline::UiLocData,
-    defaults_registry: &starbreaker_ui::DefaultValueRegistry,
-    ship_data: &crate::ui_pipeline::UiShipData,
-) -> HashMap<UiRenderKey, Result<Vec<u8>, String>> {
-    // One representative binding per unique key (first wins; any is equivalent).
-    let mut representatives: HashMap<UiRenderKey, &UiBinding> = HashMap::new();
-    for binding in bindings {
-        representatives.entry(ui_render_key(binding)).or_insert(binding);
-    }
-    representatives
-        .par_iter()
-        .map(|(key, binding)| {
-            let result = crate::ui_pipeline::render_ui_binding_png(
-                binding,
-                db,
-                p4k,
-                texture_mip,
-                root_manufacturer_id,
-                loc_data,
-                ship_data,
-                Some(defaults_registry),
-                Some(root_entity_name),
-            );
-            (key.clone(), result)
-        })
-        .collect()
 }
 
 /// Decode, in parallel, every source texture the decomposed sidecar writer will
@@ -6556,11 +6525,11 @@ mod tests {
         // only for provenance) -> equal key.
         let mut same = base.clone();
         same.canvas_record_name = Some("SomeOtherRecordName".to_string());
-        assert_eq!(ui_render_key(&base), ui_render_key(&same));
+        assert_eq!(ui_render_key(&base, None), ui_render_key(&same, None));
         // Different view field (helper_name) -> different key.
         let mut different = base.clone();
         different.helper_name = Some("screen_b".to_string());
-        assert_ne!(ui_render_key(&base), ui_render_key(&different));
+        assert_ne!(ui_render_key(&base, None), ui_render_key(&different, None));
     }
 
     #[test]
@@ -8864,3 +8833,7 @@ mod tests {
 #[cfg(test)]
 #[path = "decomposed_texture_tests.rs"]
 mod texture_container_tests;
+
+#[path = "decomposed_ui_renders.rs"]
+mod ui_renders;
+use ui_renders::{UiRenders, prerender_ui_bindings, state_image_stem, ui_render_key};

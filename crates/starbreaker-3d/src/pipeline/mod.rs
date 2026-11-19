@@ -36,6 +36,7 @@ pub use crate::socpak::SocpakHierarchyNode;
 mod nmc_bridge;
 pub(crate) use self::nmc_bridge::*;
 mod child_payload;
+pub(crate) mod ui_owner_values;
 pub(crate) use self::child_payload::*;
 mod loadout;
 mod loadout_attachments;

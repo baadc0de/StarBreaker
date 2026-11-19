@@ -1238,6 +1238,10 @@ not serialized.
 | `source_item_type` | string or null | Item type (`SAttachableComponentParams.AttachDef.Type`) of the entity whose UI component this is: `Display` for display items (vehicle MFDs and physical screens, HUD projectors, radar displays, signage screens such as `SCItemDisplayScreen`), `ControlPanel` for door and light panels, `Usable`, and so on. On an interior placement with an inline `.soc` canvas it is the placement's entity class's type (the inline canvas replaces the content, not the entity). `null` when that entity is not an attachable item (transit panels) or its record is unresolved. It tells an operating panel from a display without names; `binding_kind` alone cannot (a `physical` binding may be a door pad or a cockpit gauge), and neither can the carrying entity (a geometry-less child's binding is carried by its parent). Not part of the render identity. |
 | `source_owner_resolved` | bool | Whether that entity was resolved to its DataCore record. `false` (an inline-canvas placement with no entity class) means `source_item_type` is unknown, as opposed to `null` for a resolved owner that is not an attachable item. |
 | `source_kiosk_interaction` | bool | Whether that entity has a `KioskInteractionEntityComponentParams` component: the player operates its UI (door and light panels, transit panels, ship-selector and freight kiosks), unlike a display that is only shown (vehicle MFDs and physical screens, HUD projectors, signage screens). It separates an operated `Display` item (a kiosk) from a shown one. |
+| `ui_texture_aspect_w_over_h` | f32 or null | Aspect (width / height) at which the render target lands undistorted on the entity's display faces, measured in TEXTURE space on its `$RenderToTexture` faces: the length of ∂P/∂u over that of ∂P/∂v, area-weighted (`screen_aspect::render_target_texture_aspect`). Measured for interior placements (door, light and transit panels). When set, the render takes this aspect with the authored canvas's pixel area (`aspectOverrides*` canvases reflow; a 16:9 door canvas on a 9:16 pad renders 1080 × 1920) and it takes precedence over `ui_screen_aspect_w_over_h`. Part of the render identity. |
+| `user_variables` | array | The UI owner's user variables (`UserVariablesComponentParams`: `bools`, `ints`, `floats`, `strings`, `locStrings`, in that order), with the placement's `.soc` instance values (`EntityComponentUserVariables`, by array and `__index`) applied: `{"name", "value": {"type": "bool"\|"int"\|"float"\|"string"\|"loc", "value"}}`. Written for an operated UI (`source_kiosk_interaction`); the render pins each by name (a `loc` value localized). A C2 door pad hides its lock, sensor and light controls this way. Part of the render identity. |
+| `state_types` | array | The UI owner's interaction state machine (`SInteractionStateMachineParams` state types bound by state): `{"name", "states", "default_state"}` (`default_state`: the type's `DefaultState`, else its first state). Every render pins `state.<name>.<state>` for every type (each in its default state, the one a state render names in that state). Operated UIs only. |
+| `state_images` | array | Renders of the owner's other states the canvas binds (a `state.<type>.` path in the canvas or a canvas it embeds), one state type away from the default: `{"state_type", "state", "generated_image_path"}`. A render identical to the default is not written. A door pad carries `DoorOpenState` `DoorOpened` / `DoorOpening` / `DoorClosing`, `DoorLockState` `DoorLocked`, `PowerState` `PowerLow` / `PowerLost`, `OverrideableState` `CanOverride` when they differ. |
 
 The `generated_*` fields are filled only when the render succeeds; a failed
 render logs a warning and leaves them `null`.
@@ -1265,9 +1269,14 @@ Data/UI/Generated/{ui_type}/{manufacturer}/{ship}/{asset}.png
 Example: `Data/UI/Generated/ship/drak/Clipper/mesh_end_screen_plane.png`.
 
 Paths are names, not content hashes. Each distinct render identity
-(`UiRenderKey`: canvas GUIDs, kind, helper, dashboard view/slot, loc keys,
-host SWF, screen aspect) is rendered once and reused across placements. When
-two bindings map to the same path, the first file written wins.
+(`UiRenderKey`, `decomposed_ui_renders.rs`: canvas GUIDs, kind, helper,
+dashboard view/slot, loc keys, host SWF, screen and texture aspects, the
+owner's user variables, the pinned state) is rendered once and reused across
+placements. The first identity with a given asset name (children first, then
+interior placements, in order) keeps `{asset}.png`; another identity with that
+name is written as `{asset}_{hash8}.png` (a hash of its key), so two door pads
+with different aspects or hidden controls no longer share one file. A state
+render is `{stem}__{state_type}_{state}.png` (lowercased).
 
 Every export that produced generated UI files also writes
 `Data/UI/Generated/.export_stamp.json` (write time and `git describe`), which
@@ -1324,6 +1333,12 @@ other bindings own the faces no helper claims (a binding propagated from another
 entity whose helper is not on the mesh claims none), and a material slot whose
 faces resolve to different outcomes stays dark. A binding without these keys (an
 older export) or with an unresolved owner is left dark.
+
+It swaps a face between the binding's default image and its `state_images[]`
+(one material instance per sidecar, submaterial and image): a door pad follows
+its door, `DoorOpening` / `DoorClosing` while the door's fragment plays and
+`DoorOpened` at rest when open; states the viewer does not model (lock, power,
+override) are shown on request (`sc.Screens.States`).
 
 ## Metadata-only animation catalogue
 
