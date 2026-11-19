@@ -27,6 +27,11 @@ pub(crate) fn entity_ref(xml: &CryXml, entity: &CryXmlNode) -> SocEntityRef {
         entity_id,
         links: entity_links(xml, entity),
         inline_loadout: inline_loadout(xml, entity),
+        entity_name: attr(xml, entity, "Name").filter(|s| !s.is_empty()).map(str::to_string),
+        interaction_links: super::entity_interactions::interaction_links(xml, entity),
+        parent: super::entity_interactions::parent_attachment(xml, entity),
+        tile_port_name: super::entity_interactions::tile_port_name(xml, entity),
+        overrides: super::entity_interactions::overrides(xml, entity),
     }
 }
 

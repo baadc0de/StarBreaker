@@ -28,9 +28,13 @@ mod light_field_tests;
 pub(crate) mod light_component;
 pub(crate) mod light_anchor;
 pub(crate) mod entity_links;
+pub(crate) mod entity_interactions;
 #[cfg(test)]
 #[path = "socpak_entity_tests.rs"]
 mod entity_tests;
+#[cfg(test)]
+#[path = "socpak_lift_tests.rs"]
+mod lift_tests;
 mod room_containment;
 pub(crate) mod room_volume;
 #[path = "socpak_light_fields.rs"]
@@ -301,12 +305,8 @@ pub fn load_interior_from_socpak(
         }
     }
 
-    meshes.extend(extract_root_item_port_meshes(
-        &inner,
-        &name,
-        container_transform,
-        root_item_port_reference_candidates,
-    ));
+    let ports = extract_root_item_port_meshes(&inner, &name, container_transform, root_item_port_reference_candidates);
+    meshes.extend(drop_ports_occupied_by_entities(ports, &meshes));
     if let Some((_, descriptor)) = read_root_container_xml(&inner, &name) {
         light_anchor::assign_item_port_positions(
             &mut lights,
@@ -1126,8 +1126,23 @@ fn push_item_port_mesh(
         tint_palette_name: None,
         ui_canvas_guid: None,
         ui_location_loc_key: None,
-        entity: Default::default(),
+        entity: crate::types::SocEntityRef {
+            tile_port_name: attrs.get("name").map(|name| name.to_string()),
+            ..Default::default()
+        },
     });
+}
+
+/// Root item-port meshes minus the ports a `.soc` entity occupies: an entity
+/// whose `TileAttachmentParams@ItemPortName` names a port is that port's
+/// occupant, placed from the `.soc` with its own id, links and transform (the
+/// port's `interactionOffset` is its interaction point, not the entity frame).
+fn drop_ports_occupied_by_entities(ports: Vec<InteriorMesh>, entities: &[InteriorMesh]) -> Vec<InteriorMesh> {
+    let occupied: HashSet<&str> = entities.iter().filter_map(|m| m.entity.tile_port_name.as_deref()).collect();
+    ports
+        .into_iter()
+        .filter(|port| !port.entity.tile_port_name.as_deref().is_some_and(|name| occupied.contains(name)))
+        .collect()
 }
 
 fn normalize_item_port_entity_name(port_name: &str) -> Option<String> {
@@ -1414,8 +1429,9 @@ const SKIP_ENTITY_CLASSES: &[&str] = &[
     "SurfaceRaindropsTarget",
     "TagPoint",
     "TransitDestination",
-    "TransitGateway",
-    "TransitManager",
+    // `TransitGateway` and `TransitManager` are kept (WP-P5): they author no
+    // geometry, and the pipeline lists a gateway as an interior entity by its
+    // `TransitGatewayParams` component.
     "TransitNavSpline",
     "VibrationAudioPoint",
     "VehicleAudioPoint",

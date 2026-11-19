@@ -72,6 +72,10 @@ pub(crate) struct InteriorContainerData {
     pub proximity_sensors: Vec<super::interior_entities::ProximitySensor>,
     /// Inventory containers (e.g. freight-elevator cargo grids) of this container.
     pub inventory_containers: Vec<super::inventory_containers::InteriorInventoryContainer>,
+    /// Geometry-less interactive entities: lift path nodes, transit gateways, interaction-only buttons (WP-P5).
+    pub entities: Vec<super::lifts::InteriorEntity>,
+    /// Lift carriages with their stops and riders (WP-P5).
+    pub lifts: Vec<super::lifts::Lift>,
 }
 
 /// Discovery pass: parse socpaks to find unique CGF paths and placements.
@@ -354,7 +358,7 @@ fn helper_transform_duplicates_offset(helper_transform: glam::Mat4, offset_trans
         && helper_rotation.angle_between(offset_rotation).abs() < 1e-2
 }
 
-fn resolve_nmc_helper_transform(
+pub(crate) fn resolve_nmc_helper_transform(
     nmc: Option<&crate::nmc::NodeMeshCombo>,
     helper_name: Option<&str>,
 ) -> Option<glam::Mat4> {
@@ -666,6 +670,7 @@ pub(crate) fn build_interiors_from_payloads(
     // Built lazily — only entities that resolve via GUID trigger loadout walks.
     let mut entity_index: Option<starbreaker_datacore::loadout::EntityIndex> = None;
     let mut sensor_resolver = super::interior_entities::SensorResolver::new(db);
+    let mut interaction_resolver = super::interior_interactions::InteractionResolver::new(db, Some(p4k));
     let mut container_resolver = super::inventory_containers::ContainerResolver::new(db);
 
     for payload in payloads {
@@ -823,6 +828,14 @@ pub(crate) fn build_interiors_from_payloads(
 
         prune_colocated_standard_canvas_overlays(&mut placements);
         inherit_colocated_ui_rotations(&mut placements);
+        let placed: HashSet<String> = placements.iter().filter_map(|p| p.identity.entity_id.clone()).collect();
+        let (entities, lifts) = super::lifts::resolve_container(
+            &mut interaction_resolver,
+            Some(p4k),
+            &payload.meshes,
+            &mut placements,
+            &placed,
+        );
 
         container_data.push(InteriorContainerData {
             name: payload.name.clone(),
@@ -849,6 +862,8 @@ pub(crate) fn build_interiors_from_payloads(
             palette: None,
             proximity_sensors,
             inventory_containers,
+            entities,
+            lifts,
         });
     }
 
@@ -2054,6 +2069,8 @@ mod tests {
                     lights: Vec::new(),
                     palette: None,
                     proximity_sensors: Vec::new(),
+                    entities: Vec::new(),
+                    lifts: Vec::new(),
                     inventory_containers: Vec::new(),
                 },
                 // The root entity's own interior attached at a hull helper bone
@@ -2069,6 +2086,8 @@ mod tests {
                     lights: Vec::new(),
                     palette: None,
                     proximity_sensors: Vec::new(),
+                    entities: Vec::new(),
+                    lifts: Vec::new(),
                     inventory_containers: Vec::new(),
                 },
                 // A genuine child-entity container: its placements are in the
@@ -2083,6 +2102,8 @@ mod tests {
                     lights: Vec::new(),
                     palette: None,
                     proximity_sensors: Vec::new(),
+                    entities: Vec::new(),
+                    lifts: Vec::new(),
                     inventory_containers: Vec::new(),
                 },
             ],

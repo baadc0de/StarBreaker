@@ -43,6 +43,8 @@ fn container(parent_node_name: Option<&str>) -> LoadedInteriors {
             room_volumes: Vec::new(),
             palette: None,
             proximity_sensors: Vec::new(),
+            entities: Vec::new(),
+            lifts: Vec::new(),
             inventory_containers: Vec::new(),
         }],
     }

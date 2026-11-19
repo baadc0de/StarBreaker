@@ -214,8 +214,10 @@ pub(crate) fn placement_identity(mesh: &InteriorMesh) -> PlacementIdentity {
         entity_id: mesh.entity.entity_id.clone(),
         entity_class_guid: mesh.entity_class_guid.clone(),
         links: mesh.entity.links.clone(),
-        loadout_owner_entity_id: None,
-        item_port_name: None,
+        entity_name: mesh.entity.entity_name.clone(),
+        interaction_links: mesh.entity.interaction_links.clone(),
+        parent: mesh.entity.parent.clone(),
+        ..Default::default()
     }
 }
 

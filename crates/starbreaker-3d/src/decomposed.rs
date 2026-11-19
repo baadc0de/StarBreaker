@@ -593,6 +593,10 @@ struct InteriorContainerRecord {
     room_volumes: Vec<serde_json::Value>,
     proximity_sensors: Vec<serde_json::Value>,
     inventory_containers: Vec<serde_json::Value>,
+    /// Geometry-less interactive entities (WP-P5).
+    entities: Vec<serde_json::Value>,
+    /// Lift carriages (WP-P5).
+    lifts: Vec<serde_json::Value>,
 }
 
 #[derive(Debug, Clone)]
@@ -2088,6 +2092,8 @@ pub(crate) fn write_decomposed_export(
             room_volumes: container.room_volumes.iter().map(|volume| volume.to_json()).collect(),
             proximity_sensors: container.proximity_sensors.iter().map(|sensor| sensor.to_json()).collect(),
             inventory_containers: container.inventory_containers.iter().map(|c| c.to_json()).collect(),
+            entities: container.entities.iter().map(|e| e.to_json()).collect(),
+            lifts: container.lifts.iter().map(|l| l.to_json()).collect(),
         });
 
         if container_count > 0 && total_interior_placements == 0 {
@@ -2568,6 +2574,11 @@ fn interior_container_json(container: &InteriorContainerRecord) -> serde_json::V
                 "links": placement.identity.links,
                 "loadout_owner_entity_id": placement.identity.loadout_owner_entity_id,
                 "item_port_name": placement.identity.item_port_name,
+                "entity_name": placement.identity.entity_name,
+                "interaction_links": placement.identity.interaction_links,
+                "parent_attachment": placement.identity.parent,
+                "door": placement.identity.door,
+                "interaction_points": placement.identity.interaction_points,
                 "ui_bindings": placement.ui_bindings.iter().map(ui_binding_json).collect::<Vec<_>>(),
                 "transform": placement.transform,
                 "palette_id": placement.palette_id,
@@ -2577,6 +2588,8 @@ fn interior_container_json(container: &InteriorContainerRecord) -> serde_json::V
         "room_volumes": container.room_volumes,
         "proximity_sensors": container.proximity_sensors,
         "inventory_containers": container.inventory_containers,
+        "entities": container.entities,
+        "lifts": container.lifts,
     })
 }
 
@@ -8044,8 +8057,7 @@ mod tests {
                     entity_id: Some("door-id".into()),
                     entity_class_guid: Some("1234".into()),
                     links: vec!["target-id".into()],
-                    loadout_owner_entity_id: None,
-                    item_port_name: None,
+                    ..Default::default()
                 },
                 ui_bindings: Vec::new(),
                 transform: [
@@ -8060,6 +8072,8 @@ mod tests {
             room_volumes: vec![serde_json::json!({ "kind": "box" })],
             proximity_sensors: vec![serde_json::json!({ "entity_id": "sensor-id", "links": ["door-id"] })],
             inventory_containers: vec![serde_json::json!({ "entity_id": "grid-id" })],
+            entities: Vec::new(),
+            lifts: Vec::new(),
         };
 
         let value = build_scene_manifest_value(

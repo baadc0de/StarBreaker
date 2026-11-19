@@ -232,6 +232,8 @@ mod tests {
             lights: vec![light],
             palette: None,
             proximity_sensors: Vec::new(),
+            entities: Vec::new(),
+            lifts: Vec::new(),
             inventory_containers: Vec::new(),
         });
         let rigs = HashMap::from([("owner".into(), &rig)]);
@@ -294,6 +296,8 @@ mod tests {
             lights,
             palette: None,
             proximity_sensors: Vec::new(),
+            entities: Vec::new(),
+            lifts: Vec::new(),
             inventory_containers: Vec::new(),
         });
         let rigs = HashMap::from([("owner".into(), &rig)]);

@@ -212,6 +212,85 @@ A door's interactions therefore join as: its placement `entity_id` ←
 a panel placement's `links[]`, ← a panel placement's
 `loadout_owner_entity_id`, ← a sensor's `links[]`.
 
+#### Interaction wiring, entities and lifts (WP-P5, cache format 31)
+
+Placements also carry how the entity is operated
+(`socpak/entity_interactions.rs`, `pipeline/interior_interactions.rs`):
+
+- `entity_name` — the `.soc` entity's `Name` (labels and logs only).
+- `interaction_links[]` — `InteractionLinkController/Link` in authored order:
+  `{source_slot, target_entity_id, target_slot}`. When the entity's
+  interaction `source_slot` fires (a button's `Descend`, a carriage's
+  `Arrived at 1`), `target_slot` is delivered to `target_entity_id` (same
+  `interiors[]` entry). Links with a null target are dropped.
+- `parent_attachment` — `null`, or `{parent_entity_id, attachment_type,
+  attachment_target, offset_position, offset_rotation (w, x, y, z),
+  offset_scale}` from `ParentEntityCryGUID` / `AttachmentType` /
+  `AttachmentTarget` / `ParentOffset*`: the entity rides that entity, on the
+  node `attachment_target`. The placement's own `transform` stays as authored
+  (container frame at authoring time).
+- `door` — `null`, or `{animation_speed, use_auto_close_delay,
+  auto_close_delay}` for a class with `SCItemDoorParams`
+  (`DoorAnimationSpeed`, `UseAutoCloseDelay`, `AutoCloseDelay`), with the
+  instance's `PropertiesDataCore` overrides applied.
+- `interaction_points[]` — the class's `SEntityInteractableParams`
+  interaction points that offer at least one interaction: `{helper_name,
+  radius, helper_transform, interactions[]}`; each interaction is `{name,
+  display_name_key, display_name, primary}`, in authored order (`name`: the
+  shared interaction, the slot an `interaction_links[]` entry names;
+  `display_name`: `display_name_key` resolved through English `global.ini`).
+  `helper_transform` is `null` on placements (the helper is a node of the
+  placement's mesh).
+
+`entities[]` lists the container's geometry-less interactive entities, which
+have no placement: lift path nodes (`SCItemElevatorPathNodeParams`, `kind:
+"path_node"`), transit gateways and limbo nodes (`TransitGatewayParams` /
+`TransitLimboNodeParams`, `"transit_gateway"` / `"transit_limbo"`), and
+entities whose geometry is helpers only but that offer interactions and send
+interaction links (`"interaction"`, e.g. a call button outside the hull).
+Recognised by component, never by class name. Each carries `entity_id`,
+`entity_name`, `entity_class_guid`, `entity_class`, `kind`, `transform`
+(container-local), `links[]`, `interaction_links[]`, `parent_attachment`,
+`interaction_points[]` (with `helper_transform`: the helper's frame in the
+entity's geometry, 4×4 column-major metres, from its NMC; `null` when the
+geometry lacks it) and `traversal_links[]`: the interaction links the game
+builds at run time from the entity's `SEntityTraversingTreeParams`,
+`{via[], item_port_name, linked_interaction_name, local_interaction_path,
+local_interaction}` (`via`: the traversal node types without the
+`SEntityTraversingNodeType` prefix; `local_interaction`: the class's shared
+interaction the path indexes, e.g. `GatewayOpen`). What an `item_port_name`
+such as `hardpoint_Elevator_Exterior_Door` resolves to at run time is not
+exported.
+
+`lifts[]` lists one entry per entity whose class has `SCItemElevatorParams` (a
+lift carriage):
+
+- `entity_id`, `entity_name`, `entity_class_guid`, `entity_class`;
+- `params`: `max_speed` (m/s), `easing_distance` (m), `slow_down_at_bends`,
+  `open_wait_time`, `queue_wait_time`, `idling_period` (s), and the names of
+  `open_inner_door_interaction`, `open_inner_door_finished_interaction`,
+  `close_all_doors_interaction`, `close_inner_door_finished_interaction`. The
+  speed profile between them is engine code, not data;
+- `grid_geometry`: the carriage's own physics grid geometry path, or `null`;
+- `rest_node_id`: the first path node the carriage's `EntityLinks` target;
+- `stops[]` in chain order: `{index, node_entity_id, node_entity_name, kind
+  (stop | waypoint | teleport, the node's Type), position (container-local
+  metres), landing_door_ids[] (the node's EntityLinks targets whose class has
+  SCItemDoorParams), teleport_time_scale, gateway_timing_in_transit,
+  gateway_interaction, accessibility ({kind, accessible_timing_in_transit} or
+  null)}`. `index` is the carriage's slot number (`From Elevator call
+  <index>`, `Arrived at <index>`). Path nodes link the next node by
+  `EntityLinks`; the chain starts at the node of the rest node's linked
+  component that no node links to. A branched, cyclic or disconnected graph
+  is logged and that lift is not exported;
+- `riders[]`: the entity ids whose `parent_attachment` chain reaches the
+  carriage (sorted).
+
+A root container `ItemPort` that a `.soc` entity names in its
+`TileAttachmentParams@ItemPortName` is that entity: it is not placed a second
+time from the port (cache format 31; earlier packages place the C2 lift
+carriage twice, the second one static at the port's `interactionOffset`).
+
 `room_volumes[]` lists the extents of the rooms the container registers in
 `<name>/metadata/entitycomponentroom.xml`, one entry per `AreaComponent`
 segment that links a registered room GUID: `room` (GUID), `room_name` and

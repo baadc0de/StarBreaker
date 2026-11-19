@@ -1118,6 +1118,91 @@ pub struct SocEntityRef {
     /// replace its class loadout. `None` when the entity authors none (the
     /// class loadout applies); `Some(vec![])` when it authors an empty one.
     pub inline_loadout: Option<Vec<InlineLoadoutEntry>>,
+    /// The entity's authored `Name` (`Elevator_Floor-001`), for logs.
+    pub entity_name: Option<String>,
+    /// `InteractionLinkController/Link`, in authored order: what this entity
+    /// sends to which entity when one of its interactions fires.
+    pub interaction_links: Vec<InteractionLink>,
+    /// `ParentEntityCryGUID` and its attachment: the entity rides another one.
+    pub parent: Option<ParentAttachment>,
+    /// `TileAttachmentParams@ItemPortName`: the root container item port this
+    /// entity occupies. The port's own `ItemPort` record describes the same
+    /// entity and is not placed again.
+    pub tile_port_name: Option<String>,
+    /// Instance `PropertiesDataCore` values the exporter reads (door timing,
+    /// path-node gateway and accessibility, traversal links).
+    pub overrides: EntityOverrides,
+}
+
+/// One `InteractionLinkController/Link` of a `.soc` entity: when the entity's
+/// interaction `source_slot` fires, `target_slot` is delivered to the entity
+/// `target_entity_id` of the same object container.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
+pub struct InteractionLink {
+    pub source_slot: String,
+    pub target_entity_id: String,
+    pub target_slot: String,
+}
+
+/// `ParentEntityCryGUID` / `AttachmentType` / `AttachmentTarget` and the
+/// `ParentOffset*` of an attached entity. The entity's own `Pos`/`Rotate`
+/// stay its container frame; the offset is relative to the target.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct ParentAttachment {
+    pub parent_entity_id: String,
+    /// `CharacterBone`, …; `None` when not authored.
+    pub attachment_type: Option<String>,
+    /// The node or bone of the parent the entity hangs on (`Lift_Platform`).
+    pub attachment_target: Option<String>,
+    pub offset_position: [f64; 3],
+    /// Quaternion (w, x, y, z), as authored.
+    pub offset_rotation: [f64; 4],
+    pub offset_scale: [f64; 3],
+}
+
+/// Instance overrides of an entity's class values, read from its `.soc`
+/// `PropertiesDataCore` by component `__type`. `None` / empty: the class
+/// value applies.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct EntityOverrides {
+    /// `SCItemDoorParams@DoorAnimationSpeed`.
+    pub door_animation_speed: Option<f32>,
+    /// `SCItemDoorParams@UseAutoCloseDelay`.
+    pub use_auto_close_delay: Option<bool>,
+    /// `SCItemDoorParams@AutoCloseDelay`.
+    pub auto_close_delay: Option<f32>,
+    /// `SCItemElevatorPathNodeParams/gatewayParams@interaction` (non-empty).
+    pub gateway_interaction: Option<String>,
+    /// `SCItemElevatorPathNodeParams/accessibilityParams` (`__type`,
+    /// `accessibleTimingInTransit`).
+    pub accessibility: Option<Accessibility>,
+    /// `SEntityTraversingTreeParams`: the interaction links the game builds at
+    /// run time by walking the tree (`SInteractionLinkExecuteCreateInteractionLinkNode`).
+    pub traversal_links: Vec<TraversalLink>,
+}
+
+/// A path node's accessibility (`AccessibilityBaseParams` subtype).
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct Accessibility {
+    /// The `__type`, e.g. `AccessibilityExteriorZoneParams`.
+    pub kind: String,
+    pub accessible_timing_in_transit: Option<f32>,
+}
+
+/// A run-time interaction link from an entity traversal tree: the entity's
+/// own interaction `local_interaction` (resolved to its name against the
+/// class's shared interactions) linked to `linked_interaction_name` on what
+/// the tree reaches (`item_port_name`: a vehicle item port).
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
+pub struct TraversalLink {
+    /// Traversal node types from the root, without the `SEntityTraversingNodeType` prefix.
+    pub via: Vec<String>,
+    pub item_port_name: Option<String>,
+    pub linked_interaction_name: String,
+    /// As authored (`InteractableComponent.Interactable.SharedInteractions[5]`).
+    pub local_interaction_path: String,
+    /// The shared interaction's `Name`, resolved by the pipeline (`GatewayOpen`).
+    pub local_interaction: Option<String>,
 }
 
 /// One `SItemPortLoadoutEntryParams` of an inline manual loadout.
@@ -1159,6 +1244,51 @@ pub struct PlacementIdentity {
     pub loadout_owner_entity_id: Option<String>,
     /// For a loadout-attached item: the item port it occupies on its parent.
     pub item_port_name: Option<String>,
+    /// The `.soc` entity's `Name`.
+    pub entity_name: Option<String>,
+    /// The entity's `InteractionLinkController` links (WP-P5).
+    pub interaction_links: Vec<InteractionLink>,
+    /// The entity this one rides (`ParentEntityCryGUID`, WP-P5).
+    pub parent: Option<ParentAttachment>,
+    /// Door timing, for an entity whose class has `SCItemDoorParams`.
+    pub door: Option<DoorTiming>,
+    /// The class's interaction points and their interactions.
+    pub interaction_points: Vec<InteractionPoint>,
+}
+
+/// `SCItemDoorParams` timing of a door entity: the class values with the
+/// instance's overrides applied.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct DoorTiming {
+    /// `DoorAnimationSpeed`: the rate the Open/Close clips play at.
+    pub animation_speed: f32,
+    pub use_auto_close_delay: bool,
+    pub auto_close_delay: f32,
+}
+
+/// One `SInteractionPointParams` of an entity class: a helper the player aims
+/// at and the interactions it offers there, in authored order.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct InteractionPoint {
+    pub helper_name: String,
+    pub radius: Option<f32>,
+    /// The helper's frame in the entity's geometry (column-major 4×4, metres),
+    /// when the geometry carries it; set for geometry-less entities, whose
+    /// helpers a consumer cannot read from a mesh.
+    pub helper_transform: Option<[[f32; 4]; 4]>,
+    pub interactions: Vec<PointInteraction>,
+}
+
+/// An interaction offered at an interaction point.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct PointInteraction {
+    /// The shared interaction's `Name` (the slot an `InteractionLink` names).
+    pub name: String,
+    /// `DisplayName` as authored (`@innerthought_lift_top_deck`).
+    pub display_name_key: Option<String>,
+    /// `DisplayName` resolved through `global.ini` (English).
+    pub display_name: Option<String>,
+    pub primary: bool,
 }
 
 /// All geometry and lights from a single socpak interior container.
