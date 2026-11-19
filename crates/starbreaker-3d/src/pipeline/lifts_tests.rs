@@ -135,7 +135,10 @@ fn c2_lift_resolves_from_game_data() {
     assert_eq!(panel.identity.interaction_links.len(), 4);
     assert_eq!(panel.identity.parent.as_ref().map(|p| p.parent_entity_id.as_str()), Some(PLATFORM));
     let hold_door = placement(HOLD_DOOR).identity.door.clone().expect("door timing");
-    assert_eq!((hold_door.animation_speed, hold_door.use_auto_close_delay), (1.0, false));
+    assert_eq!((hold_door.animation_speed, hold_door.use_auto_close_delay), (Some(1.0), Some(false)));
+    // The belly hatch instance authors its point 0 with no interactions: that point is not exported.
+    let hatch = placement("405af200-ec86-04b3-b5d2-4eb715112589");
+    assert!(hatch.identity.interaction_points.iter().all(|p| p.index != 0), "{:?}", hatch.identity.interaction_points);
     assert!(placement(PLATFORM).identity.door.is_none());
     let carriages = container.placements.iter().filter(|p| p.identity.entity_class_guid.is_none() && {
         let mesh = &interiors.unique_cgfs[p.mesh_index];

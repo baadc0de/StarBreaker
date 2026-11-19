@@ -232,10 +232,15 @@ Placements also carry how the entity is operated
 - `door` — `null`, or `{animation_speed, use_auto_close_delay,
   auto_close_delay}` for a class with `SCItemDoorParams`
   (`DoorAnimationSpeed`, `UseAutoCloseDelay`, `AutoCloseDelay`), with the
-  instance's `PropertiesDataCore` overrides applied.
+  instance's `PropertiesDataCore` overrides applied. A value the data does
+  not supply as a number / boolean is `null` (logged), never a default.
 - `interaction_points[]` — the class's `SEntityInteractableParams`
-  interaction points that offer at least one interaction: `{helper_name,
-  radius, helper_transform, interactions[]}`; each interaction is `{name,
+  interaction points that offer at least one interaction: `{index,
+  helper_name, radius, helper_transform, interactions[]}` (`index`: the
+  point's position in the class's `InteractionPoints`). An instance that
+  authors a point's `Interactions` as an empty array (`__arraySize="0"`, the
+  C2 belly hatch's point 0) removes that point; an instance that replaces a
+  point's interactions with entries is logged and the class's are exported; each interaction is `{name,
   display_name_key, display_name, primary}`, in authored order (`name`: the
   shared interaction, the slot an `interaction_links[]` entry names;
   `display_name`: `display_name_key` resolved through English `global.ini`).
@@ -287,9 +292,15 @@ lift carriage):
   carriage (sorted).
 
 A root container `ItemPort` that a `.soc` entity names in its
-`TileAttachmentParams@ItemPortName` is that entity: it is not placed a second
-time from the port (cache format 31; earlier packages place the C2 lift
-carriage twice, the second one static at the port's `interactionOffset`).
+`TileAttachmentParams@ItemPortName` is that entity: once the entity is
+placed, the port is not placed a second time (cache format 31; earlier
+packages place the C2 lift carriage twice, the second one static at the
+port's `interactionOffset`). A port whose occupant was not placed keeps its
+own placement.
+
+A light whose `.soc` entity is attached to another entity carries
+`parent_entity_id` (its `ParentEntityCryGUID`; omitted for a free light): a
+consumer moves it with that entity, e.g. a lift carriage.
 
 `room_volumes[]` lists the extents of the rooms the container registers in
 `<name>/metadata/entitycomponentroom.xml`, one entry per `AreaComponent`

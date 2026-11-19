@@ -166,7 +166,7 @@ pub(crate) fn resolve_container(
             .unwrap_or_default();
         placement.identity.door = resolver.door(guid.as_deref(), &overrides);
         placement.identity.interaction_points =
-            resolver.class(guid.as_deref()).map(|f| f.interaction_points.clone()).unwrap_or_default();
+            resolver.points(guid.as_deref(), &overrides, placement.identity.entity_id.as_deref());
     }
     let by_id: HashMap<&str, &InteriorMesh> =
         meshes.iter().filter_map(|m| Some((m.entity.entity_id.as_deref()?, m))).collect();
@@ -187,7 +187,7 @@ pub(crate) fn resolve_container(
         } else {
             continue;
         };
-        let mut points = facts.interaction_points.clone();
+        let mut points = resolver.points(mesh.entity_class_guid.as_deref(), &mesh.entity.overrides, Some(id));
         let geometry = facts.geometry_path.as_deref().filter(|g| !g.is_empty());
         let nmc = geometry.zip(p4k).and_then(|(g, p4k)| super::load_nmc_for_cgf(p4k, g));
         for point in &mut points {

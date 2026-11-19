@@ -935,6 +935,9 @@ pub struct LightInfo {
     pub(crate) source_component: Option<crate::socpak::light_component::LightComponent>,
     #[serde(default)]
     pub attachment: Option<LightAttachment>,
+    /// `ParentEntityCryGUID` of the light's entity: it rides that entity (a lift carriage, WP-P5). Omitted when free.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_entity_id: Option<String>,
     /// Active state's authored style, also preserved in states.
     pub light_style: Option<i32>,
     pub name: String,
@@ -1179,6 +1182,12 @@ pub struct EntityOverrides {
     /// `SEntityTraversingTreeParams`: the interaction links the game builds at
     /// run time by walking the tree (`SInteractionLinkExecuteCreateInteractionLinkNode`).
     pub traversal_links: Vec<TraversalLink>,
+    /// `SEntityInteractableParams…InteractionPoints[i].Interactions` authored
+    /// as an empty array: the instance offers nothing at class point `i`.
+    pub cleared_interaction_points: Vec<usize>,
+    /// Points whose `Interactions` the instance replaces with entries (not
+    /// applied: reported, the class's are exported).
+    pub replaced_interaction_points: Vec<usize>,
 }
 
 /// A path node's accessibility (`AccessibilityBaseParams` subtype).
@@ -1260,16 +1269,19 @@ pub struct PlacementIdentity {
 /// instance's overrides applied.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct DoorTiming {
-    /// `DoorAnimationSpeed`: the rate the Open/Close clips play at.
-    pub animation_speed: f32,
-    pub use_auto_close_delay: bool,
-    pub auto_close_delay: f32,
+    /// `DoorAnimationSpeed`: the rate the Open/Close clips play at; `None`
+    /// when the value is absent or not a number (reported, never invented).
+    pub animation_speed: Option<f32>,
+    pub use_auto_close_delay: Option<bool>,
+    pub auto_close_delay: Option<f32>,
 }
 
 /// One `SInteractionPointParams` of an entity class: a helper the player aims
 /// at and the interactions it offers there, in authored order.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct InteractionPoint {
+    /// The point's index in the class's `InteractionPoints` (instance overrides name it).
+    pub index: usize,
     pub helper_name: String,
     pub radius: Option<f32>,
     /// The helper's frame in the entity's geometry (column-major 4×4, metres),

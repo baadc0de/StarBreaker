@@ -108,6 +108,21 @@ pub(crate) fn overrides(xml: &CryXml, entity: &CryXmlNode) -> EntityOverrides {
             })
         });
     }
+    // Instance interaction-point overrides by `__index`: an `Interactions` array authored empty clears the point.
+    if let Some(interactable) = component(xml, entity, "SEntityInteractableParams")
+        .and_then(|c| child(xml, c, "Interactable"))
+        .and_then(|i| child(xml, i, "InteractionPoints"))
+    {
+        for point in children(xml, interactable) {
+            let (Some(index), Some(list)) = (attr(xml, point, "__index").and_then(|i| i.parse().ok()), child(xml, point, "Interactions")) else {
+                continue;
+            };
+            match attr(xml, list, "__arraySize").and_then(|n| n.parse::<usize>().ok()) {
+                Some(0) => out.cleared_interaction_points.push(index),
+                _ => out.replaced_interaction_points.push(index),
+            }
+        }
+    }
     if let Some(tree) = component(xml, entity, "SEntityTraversingTreeParams")
         && let Some(nodes) = child(xml, tree, "TraversingNodes")
     {

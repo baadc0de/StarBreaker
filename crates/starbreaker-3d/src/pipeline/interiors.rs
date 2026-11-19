@@ -688,7 +688,13 @@ pub(crate) fn build_interiors_from_payloads(
         // Resolve each distinct per-object tint palette once per payload.
         let mut palette_cache: HashMap<String, Option<mtl::TintPalette>> = HashMap::new();
 
+        // Root item ports occupied by a placed `.soc` entity (see `occupied_port`).
+        let mut placed_ports: HashSet<String> = HashSet::new();
         for im in &payload.meshes {
+            if occupied_port(im, &placed_ports) {
+                log::debug!("  item port {:?} is its placed .soc entity; not placed again", im.entity.tile_port_name);
+                continue;
+            }
             // A walk-up trigger (e.g. a door's proximity sensor) is known by its
             // class's sensor component; its geometry, if any, is placed as usual.
             if let Some(sensor) = sensor_resolver.sensor(im) {
@@ -797,6 +803,11 @@ pub(crate) fn build_interiors_from_payloads(
                     ui_bindings,
                     identity: super::interior_entities::placement_identity(im),
                 });
+                if im.entity.entity_id.is_some()
+                    && let Some(port) = &im.entity.tile_port_name
+                {
+                    placed_ports.insert(port.clone());
+                }
 
                 // Expand entity loadout attachments. Many interior entities
                 // (e.g. fire-extinguisher cabinets, kit lockers) carry their
@@ -877,6 +888,17 @@ pub(crate) fn build_interiors_from_payloads(
         unique_cgfs,
         containers: container_data,
     }
+}
+
+/// Root container `ItemPort`s describe the entities attached to them. A port whose occupant (the `.soc` entity naming it
+/// in `TileAttachmentParams@ItemPortName`) was placed is that entity, placed from the `.soc` with its own id, links and
+/// frame (the port's `interactionOffset` is its interaction point), and is not placed again. A port whose occupant was
+/// not placed (no geometry, an unresolved class) keeps its own placement. Port meshes follow the `.soc` entities in a
+/// payload (`socpak::load_interior_from_socpak`).
+pub(crate) fn occupied_port(mesh: &crate::types::InteriorMesh, placed_ports: &std::collections::HashSet<String>) -> bool {
+    mesh.entity.entity_id.is_none()
+        && mesh.entity_class_name.is_some()
+        && mesh.entity.tile_port_name.as_deref().is_some_and(|port| placed_ports.contains(port))
 }
 
 fn is_metadata_only_geometry(p4k: &MappedP4k, cgf_path: &str, lod_level: u32) -> bool {
@@ -2222,6 +2244,7 @@ mod tests {
             room_volumes: Vec::new(),
             lights: vec![crate::types::LightInfo {
                 source_component: None,
+                parent_entity_id: None,
                 // Synthetic fixture dimensions and flags.
                 bulb_radius_m: 0.25,
                 plane_width_m: None,
@@ -2287,6 +2310,7 @@ mod tests {
             room_volumes: Vec::new(),
             lights: vec![crate::types::LightInfo {
                 source_component: None,
+                parent_entity_id: None,
                 // Synthetic fixture dimensions and flags.
                 bulb_radius_m: 0.25,
                 plane_width_m: None,

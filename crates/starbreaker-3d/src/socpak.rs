@@ -305,8 +305,8 @@ pub fn load_interior_from_socpak(
         }
     }
 
-    let ports = extract_root_item_port_meshes(&inner, &name, container_transform, root_item_port_reference_candidates);
-    meshes.extend(drop_ports_occupied_by_entities(ports, &meshes));
+    // A port a `.soc` entity occupies is dropped where the entity is placed (`pipeline::occupied_port`).
+    meshes.extend(extract_root_item_port_meshes(&inner, &name, container_transform, root_item_port_reference_candidates));
     if let Some((_, descriptor)) = read_root_container_xml(&inner, &name) {
         light_anchor::assign_item_port_positions(
             &mut lights,
@@ -1133,18 +1133,6 @@ fn push_item_port_mesh(
     });
 }
 
-/// Root item-port meshes minus the ports a `.soc` entity occupies: an entity
-/// whose `TileAttachmentParams@ItemPortName` names a port is that port's
-/// occupant, placed from the `.soc` with its own id, links and transform (the
-/// port's `interactionOffset` is its interaction point, not the entity frame).
-fn drop_ports_occupied_by_entities(ports: Vec<InteriorMesh>, entities: &[InteriorMesh]) -> Vec<InteriorMesh> {
-    let occupied: HashSet<&str> = entities.iter().filter_map(|m| m.entity.tile_port_name.as_deref()).collect();
-    ports
-        .into_iter()
-        .filter(|port| !port.entity.tile_port_name.as_deref().is_some_and(|name| occupied.contains(name)))
-        .collect()
-}
-
 fn normalize_item_port_entity_name(port_name: &str) -> Option<String> {
     let candidate = if let Some(rest) = port_name.strip_prefix("Port") {
         let digit_count = rest.chars().take_while(|ch| ch.is_ascii_digit()).count();
@@ -1509,7 +1497,12 @@ fn process_entity_children(
         {
             let parsed_lights =
                 parse_light_entities(xml, entity, &attrs, &pos, &rot, &scale, entity_class);
-            lights.extend(parsed_lights);
+            // An attached light rides its parent entity (a lift carriage moves its lights, WP-P5).
+            let parent = attrs.get("ParentEntityCryGUID").filter(|guid| is_nonzero_guid(guid)).map(|guid| guid.to_string());
+            lights.extend(parsed_lights.into_iter().map(|mut light| {
+                light.parent_entity_id = parent.clone();
+                light
+            }));
             // Light components and geometry may coexist on the same entity.
         }
 
@@ -2095,6 +2088,7 @@ fn build_light_info_from_fields(
     let candela = proxy(intensity_raw);
     LightInfo {
         source_component: Some(source.clone()),
+        parent_entity_id: None,
         bulb_radius_m: source
             .float("sizeParams.bulbRadius")
             .unwrap_or_else(crate::types::default_bulb_radius),

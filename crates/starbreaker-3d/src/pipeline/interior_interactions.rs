@@ -95,9 +95,9 @@ fn query<'a>(db: &'a Database, record: &Record, path: &str) -> Option<Value<'a>>
 
 pub(crate) fn door_timing(component: &Value) -> DoorTiming {
     DoorTiming {
-        animation_speed: field(component, "DoorAnimationSpeed").and_then(number).unwrap_or(1.0),
-        use_auto_close_delay: field(component, "UseAutoCloseDelay").and_then(boolean).unwrap_or(false),
-        auto_close_delay: field(component, "AutoCloseDelay").and_then(number).unwrap_or(0.0),
+        animation_speed: field(component, "DoorAnimationSpeed").and_then(number),
+        use_auto_close_delay: field(component, "UseAutoCloseDelay").and_then(boolean),
+        auto_close_delay: field(component, "AutoCloseDelay").and_then(number),
     }
 }
 
@@ -138,7 +138,8 @@ pub(crate) fn interaction_points(interactable: &Value) -> Vec<InteractionPoint> 
     };
     points
         .iter()
-        .filter_map(|point| {
+        .enumerate()
+        .filter_map(|(index, point)| {
             let helper_name = field(point, "HelperName").and_then(text).unwrap_or_default().to_string();
             let Some(Value::Array(list)) = field(point, "Interactions") else { return None };
             let interactions: Vec<PointInteraction> = list
@@ -153,6 +154,7 @@ pub(crate) fn interaction_points(interactable: &Value) -> Vec<InteractionPoint> 
                 })
                 .collect();
             (!interactions.is_empty()).then(|| InteractionPoint {
+                index,
                 helper_name,
                 radius: field(point, "Radius").and_then(number),
                 helper_transform: None,
@@ -250,16 +252,27 @@ impl<'a> InteractionResolver<'a> {
     /// Door timing of an entity: its class's `SCItemDoorParams` with the instance overrides.
     pub(crate) fn door(&mut self, guid: Option<&str>, overrides: &EntityOverrides) -> Option<DoorTiming> {
         let mut door = self.class(guid)?.door.clone()?;
-        if let Some(v) = overrides.door_animation_speed {
-            door.animation_speed = v;
-        }
-        if let Some(v) = overrides.use_auto_close_delay {
-            door.use_auto_close_delay = v;
-        }
-        if let Some(v) = overrides.auto_close_delay {
-            door.auto_close_delay = v;
+        door.animation_speed = overrides.door_animation_speed.or(door.animation_speed);
+        door.use_auto_close_delay = overrides.use_auto_close_delay.or(door.use_auto_close_delay);
+        door.auto_close_delay = overrides.auto_close_delay.or(door.auto_close_delay);
+        if door.animation_speed.is_none_or(|speed| !speed.is_finite() || speed <= 0.0) {
+            log::warn!("[interior] door class {guid:?}: DoorAnimationSpeed {:?} is not a usable rate", door.animation_speed);
         }
         Some(door)
+    }
+
+    /// The class's interaction points of an entity with its instance overrides applied: a point the instance authors with
+    /// no interactions offers none and is left out.
+    pub(crate) fn points(&mut self, guid: Option<&str>, overrides: &EntityOverrides, entity: Option<&str>) -> Vec<InteractionPoint> {
+        if !overrides.replaced_interaction_points.is_empty() {
+            log::warn!(
+                "[interior] entity {entity:?}: instance replaces the interactions of points {:?}; the class's are exported",
+                overrides.replaced_interaction_points
+            );
+        }
+        let mut points = self.class(guid).map(|f| f.interaction_points.clone()).unwrap_or_default();
+        points.retain(|p| !overrides.cleared_interaction_points.contains(&p.index));
+        points
     }
 
     /// Traversal links with their local interaction resolved to the class's shared interaction name.

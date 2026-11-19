@@ -87,7 +87,19 @@ pub(crate) fn c2_lift_document() -> String {
       </EntityTraversingTreeComponent>
     </PropertiesDataCore>
   </Entity>
-  <Entity Name="Door_Ship_Exterior_CRUS_Starlifter_Elevator_Door" Pos="-7.3749989999999999,-3,-9.7499979999999997" EntityClass="Door_Ship_Exterior_CRUS_Starlifter_Elevator_Door" EntityClassGUID="a9140cda-2dd0-416d-b164-b636aa8207fb" EntityCryGUID="{HATCH}" />
+  <Entity Name="Door_Ship_Exterior_CRUS_Starlifter_Elevator_Door" Pos="-7.3749989999999999,-3,-9.7499979999999997" EntityClass="Door_Ship_Exterior_CRUS_Starlifter_Elevator_Door" EntityClassGUID="a9140cda-2dd0-416d-b164-b636aa8207fb" EntityCryGUID="{HATCH}">
+    <PropertiesDataCore __fullyInstanced="0" __version="2">
+      <InteractableComponent __type="SEntityInteractableParams">
+        <Interactable __type="SInteractableParams">
+          <InteractionPoints __fullyInstanced="0">
+            <SInteractionPointParams __index="0" __type="SInteractionPointParams">
+              <Interactions __fullyInstanced="1" __arraySize="0" />
+            </SInteractionPointParams>
+          </InteractionPoints>
+        </Interactable>
+      </InteractableComponent>
+    </PropertiesDataCore>
+  </Entity>
   <Entity Name="CRUS_Hercules_Elevator_Buttons_Exterior-000" Pos="-7.375,-3,-9.7004380000000001" EntityClass="CRUS_Hercules_Elevator_Buttons_Exterior" EntityClassGUID="646e5ad1-fbe2-4345-9934-f3623c463680" EntityCryGUID="49bd738e-4318-f2b7-487a-8fee884c3a93">
     <InteractionLinkController>
       <Link TargetCryGUID="{FLOOR_003}" NAME="NewInteractionLink" SourceSlotName="Descend" TargetSlotName="DescentRequest" Version="1" />
@@ -244,6 +256,16 @@ fn path_node_overrides_and_traversal_links_are_read() {
 }
 
 #[test]
+fn instance_interaction_point_overrides_are_read_by_index() {
+    // The belly hatch clears its class point 0 (an empty `Interactions` array); nothing else overrides points.
+    let meshes = meshes();
+    let hatch = &by_id(&meshes, HATCH).entity.overrides;
+    assert_eq!(hatch.cleared_interaction_points, [0]);
+    assert!(hatch.replaced_interaction_points.is_empty());
+    assert!(by_id(&meshes, INNER_PANEL).entity.overrides.cleared_interaction_points.is_empty());
+}
+
+#[test]
 fn tile_item_ports_and_names_are_read() {
     let meshes = meshes();
     let platform = by_id(&meshes, PLATFORM);
@@ -266,10 +288,11 @@ fn door_speed_override_is_read_by_component_type() {
 }
 
 /// Root container `ItemPort`s describe the entities attached to them; an entity that names its port in
-/// `TileAttachmentParams` is that port's occupant and must not be placed a second time from the port. The C2's port 5
-/// put a second, static carriage one metre below the hold (at the port's `interactionOffset`).
+/// `TileAttachmentParams` is that port's occupant and, once placed, is not placed a second time from the port. The C2's
+/// port 5 put a second, static carriage one metre below the hold (at the port's `interactionOffset`). A port whose
+/// occupant was not placed keeps its placement.
 #[test]
-fn a_port_occupied_by_a_soc_entity_is_not_placed_again() {
+fn a_port_occupied_by_a_placed_soc_entity_is_not_placed_again() {
     let entities = meshes();
     let xml = r#"<ObjectContainer>
         <ItemPort interactionOffset="-7.5,-3,-8.875" name="Port5_CRUS_Hercules_Lift_Platform-001[Top_Deck_C2_SETUP]" rotation="1,0,0,0" />
@@ -278,7 +301,33 @@ fn a_port_occupied_by_a_soc_entity_is_not_placed_again() {
     let identity = glam::Mat4::IDENTITY.to_cols_array_2d();
     let ports = extract_item_port_meshes_from_text_xml(xml, identity, None);
     assert_eq!(ports.len(), 2);
-    let kept = drop_ports_occupied_by_entities(ports, &entities);
+    let placed: std::collections::HashSet<String> =
+        entities.iter().filter_map(|m| m.entity.tile_port_name.clone()).collect();
+    let kept: Vec<_> = ports.iter().filter(|p| !crate::pipeline::occupied_port(p, &placed)).collect();
     let names: Vec<_> = kept.iter().filter_map(|m| m.entity_class_name.as_deref()).collect();
     assert_eq!(names, ["Synthetic_Unclaimed"]);
+    // The occupant was not placed (no geometry, an unresolved class): the port keeps its own placement.
+    assert!(ports.iter().all(|p| !crate::pipeline::occupied_port(p, &Default::default())));
+    // An entity is never mistaken for a port.
+    assert!(entities.iter().all(|e| !crate::pipeline::occupied_port(e, &placed)));
+}
+
+/// A light attached to another entity (`ParentEntityCryGUID`) records it, so a consumer moves it with that entity (a
+/// lift carriage); a free light records none.
+#[test]
+fn attached_lights_name_the_entity_they_ride() {
+    let text = format!(
+        r#"<Entities>
+             <Entity EntityClass="LightGroupObjectAttach" Name="riding" ParentEntityCryGUID="{PLATFORM}" AttachmentType="CharacterBone" AttachmentTarget="Lift_Platform" ParentOffsetPos="0,0,0" ParentOffsetRot="1,0,0,0" ParentOffsetScale="1" Pos="-7.5,-3,-7.875">
+               <EntityComponentLightGroup><BakedInLights><Light><EntityComponentLight lightType="Omni"><defaultState intensity="1"/><sizeParams lightRadius="5"/></EntityComponentLight><RelativeXForm rotation="1,0,0,0" translation="0,0,2"/></Light></BakedInLights></EntityComponentLightGroup>
+             </Entity>
+             <Entity EntityClass="Light" Name="free" Pos="1,2,3"><PropertiesDataCore><EntityComponentLight lightType="Omni"><defaultState intensity="1"/><sizeParams lightRadius="5"/></EntityComponentLight></PropertiesDataCore></Entity>
+           </Entities>"#
+    );
+    let bytes = crate::test_xml::encode(&text);
+    let lights = extract_cryxml_entities(&starbreaker_cryxml::from_bytes(&bytes).unwrap()).1;
+    assert_eq!(lights.len(), 2);
+    assert_eq!(lights[0].parent_entity_id.as_deref(), Some(PLATFORM));
+    assert_eq!(lights[1].parent_entity_id, None);
+    assert!(serde_json::to_value(&lights[1]).unwrap().get("parent_entity_id").is_none(), "omitted when free");
 }
