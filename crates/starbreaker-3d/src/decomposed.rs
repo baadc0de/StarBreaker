@@ -4340,7 +4340,11 @@ fn export_gobo_as_exr(p4k: &MappedP4k, source_path: &str, texture_mip: u32) -> O
 
     // Parse DDS and check if it's BC6H
     let dds = starbreaker_dds::DdsFile::from_bytes(&bytes).ok()?;
+    gobo_exr(&dds, texture_mip)
+}
 
+/// An HDR (BC6H) gobo as EXR bytes at `texture_mip`; `None` for any other format.
+pub(crate) fn gobo_exr(dds: &starbreaker_dds::DdsFile, texture_mip: u32) -> Option<Vec<u8>> {
     // Attempt BC6H float decode
     let (width, height, float_rgb) = match dds.decode_bc6h_to_float_rgb(texture_mip as usize) {
         Ok(Some(result)) => result,

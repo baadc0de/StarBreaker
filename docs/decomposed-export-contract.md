@@ -1321,6 +1321,8 @@ The additive top-level `player` object is:
              fire_fragments: [{fragment, guid, source, tags, frag_tags,
                                layers: [{animation, layer, loop, speed, blend_in, blend_out,
                                          exit_time, start_time, weight, joint_mask}]}]}],
+  flashlights: [{entity, port, params: SCItemFlashlightParams,
+                 projector_textures: {<lightCookie.path>: <package path>}}],
   motion: {unavailable_tag_definitions: [string],
     states: [{weapon_child_id: string|null, stance, move_speed_tag: string|null, first_person, tags,
     fragments: [{fragment, guid, source, tags, frag_tags, query_frag_tags, scopes: [string],
@@ -1349,6 +1351,16 @@ the weapon's `SEntityComponentCarryableParams.enslavementAnimationDatabase` (the
 the game runs on the held item's own rig) with the weapon's `mannequin_tags` plus
 `ADS`; options keep their authored `tags` / `frag_tags` for the consumer's state.
 Layer `animation` names are the weapon's own clips (its `animations`).
+
+`flashlights` lists every loadout item that carries the game's personal light, the
+`SCItemFlashlightParams` item component (in LIVE 4.10.2 the worn helmet): `entity` is
+the item record, `port` its loadout port name, and `params` the component verbatim
+(`localPlayerParams` / `otherParams` / `legacyParams` light parameters, `helperName`,
+`helperOffset`, `helperDirection`, `activationTag`, ...). Every `lightCookie.path` the
+params name is packaged like a scene projector gobo (BC6H as `.exr`, anything else as
+package `.dds`, at the export's texture mip) and mapped in `projector_textures`; a
+cookie the archive cannot supply is absent from the map. Interpreting the parameters
+(units, which split applies to which viewer) is the consumer's job.
 
 The camera binding is the `HeadCam` literal in StarCitizen.exe; the Player entity's
 DataCore audio-listener bones corroborate the joint but do not define a camera

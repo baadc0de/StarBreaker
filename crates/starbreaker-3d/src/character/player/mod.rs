@@ -1,4 +1,4 @@
-//! Player packages: authored ports, Mannequin queries and locomotion assets.
+//! Player packages: authored ports, Mannequin queries, locomotion assets and item flashlights.
 mod blend_space;
 mod clips;
 mod diagnostics;
@@ -12,6 +12,7 @@ mod tests;
 
 mod export;
 mod fire;
+mod flashlight;
 mod loadouts;
 mod sources;
 pub use export::export_player;

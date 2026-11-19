@@ -1,6 +1,7 @@
-//! GLB player package assembly with nested item packages and body clip sidecars.
+//! GLB player package assembly with nested item packages, body clip sidecars and item flashlights.
 use super::super::{Gender, body, clips::CharacterAnimation, loadout};
 use super::{
+    flashlight,
     loadouts::{self, Item, PlayerRequest, read},
     motion,
     ports::{self, text},
@@ -79,7 +80,9 @@ pub fn export_player(p4k: &MappedP4k, db: &Database, request: &PlayerRequest) ->
     let mut weapons = Vec::new();
     let mut parts = Vec::new();
     let mut hand_ports = Vec::new();
-    collect(&tree, &idx, gender.tag(), &mut parts, &mut hand_ports)?;
+    let mut flashlights = Vec::new();
+    collect(&tree, &idx, gender.tag(), &mut parts, &mut hand_ports, &mut flashlights)?;
+    flashlight::package_cookies(p4k, opts.texture_mip, &mut flashlights, &mut export);
     annotate_part(&mut scene["root_entity"], &parts);
     for child in scene["children"]
         .as_array_mut()
@@ -138,7 +141,7 @@ pub fn export_player(p4k: &MappedP4k, db: &Database, request: &PlayerRequest) ->
     scene["root_entity"]["animations"] = json!(animations);
     scene["player"] = json!({"gender":request.gender.to_ascii_lowercase(),"loadout":loadout,"skeleton":skeleton,"hand_ports":hand_ports,
         "camera_bone":PLAYER_CAMERA_BONE,"root_motion_bone":bones.iter().find(|b|b.parent_index.is_none()).ok_or_else(||error("root joint missing"))?.name,
-        "weapon_selection":request.weapons,"spare_attachments":request.spare_attachments,"weapons":weapons,"motion":motion,"blend_spaces":spaces,"diagnostics":diagnostics});
+        "weapon_selection":request.weapons,"spare_attachments":request.spare_attachments,"weapons":weapons,"flashlights":flashlights,"motion":motion,"blend_spaces":spaces,"diagnostics":diagnostics});
     export.files[scene_index].bytes = serde_json::to_vec_pretty(&scene).map_err(|e| error(e.to_string()))?;
     // Shared assets from nested packages must have identical bytes, never silently overwrite.
     let mut seen = std::collections::BTreeMap::new();
@@ -161,8 +164,10 @@ fn collect(
     gender: &str,
     parts: &mut Vec<(String, Value)>,
     hands: &mut Vec<Value>,
+    flashlights: &mut Vec<Value>,
 ) -> Result<()> {
     if let Some(r) = idx.find_record(&n.entity) {
+        flashlights.extend(flashlight::item(idx.db, r, &n.entity, n.port.as_ref())?);
         hands.extend(
             ports::ports(idx.db, r, &n.entity, &[gender.into()])?
                 .into_iter()
@@ -180,7 +185,7 @@ fn collect(
         }
     }
     for c in &n.children {
-        collect(c, idx, gender, parts, hands)?;
+        collect(c, idx, gender, parts, hands, flashlights)?;
     }
     Ok(())
 }

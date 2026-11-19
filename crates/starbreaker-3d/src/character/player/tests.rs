@@ -307,3 +307,14 @@ fn spare_ports_accept_by_type_and_listed_subtype() {
     assert!(loadouts::accepts(&unrestricted, &optic));
     assert!(!loadouts::accepts(&other, &magazine));
 }
+
+#[test]
+fn flashlight_cookie_sources_are_distinct_and_skip_empty_paths() {
+    let entry = json!({"entity":"synthetic_helmet","port":"synthetic_port","params":{"_Type_":"SCItemFlashlightParams",
+        "localPlayerParams":{"lightCookie":{"_Type_":"GlobalResourceMaterial","path":"textures/synthetic_a.tif"}},
+        "otherParams":{"lightCookie":{"_Type_":"GlobalResourceMaterial","path":"textures/synthetic_b.tif"}},
+        "legacyParams":{"lightCookie":{"_Type_":"GlobalResourceMaterial","path":"textures/synthetic_a.tif"}},
+        "unlit":{"lightCookie":{"_Type_":"GlobalResourceMaterial","path":""}}}});
+    assert_eq!(flashlight::cookie_sources(&entry), ["textures/synthetic_a.tif", "textures/synthetic_b.tif"]);
+    assert!(flashlight::cookie_sources(&json!({"params":{}})).is_empty());
+}
