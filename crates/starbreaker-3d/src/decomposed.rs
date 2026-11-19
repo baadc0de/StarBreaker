@@ -2609,6 +2609,7 @@ fn ui_binding_json(binding: &UiBinding) -> serde_json::Value {
         "generated_confidence": binding.generated_confidence,
         "ui_screen_aspect_w_over_h": binding.ui_screen_aspect_w_over_h,
         "source_item_type": binding.source_item_type,
+        "source_owner_resolved": binding.source_owner_resolved,
     })
 }
 
@@ -3789,6 +3790,9 @@ mod manufacturer_id_tests {
         assert!(json["source_item_type"].is_null());
         binding.source_item_type = Some("ControlPanel".into());
         assert_eq!(super::ui_binding_json(&binding)["source_item_type"], "ControlPanel");
+        assert_eq!(super::ui_binding_json(&binding)["source_owner_resolved"], false);
+        binding.source_owner_resolved = true;
+        assert_eq!(super::ui_binding_json(&binding)["source_owner_resolved"], true);
     }
 
     #[test]
@@ -3825,6 +3829,7 @@ mod manufacturer_id_tests {
             generated_confidence: None,
             ui_screen_aspect_w_over_h: None,
             source_item_type: None,
+            source_owner_resolved: false,
         };
 
         assert_eq!(generated_ui_type_segment("Objects/Spaceships/Ships/DRAK/Clipper/exterior/test.cga"), "ship");

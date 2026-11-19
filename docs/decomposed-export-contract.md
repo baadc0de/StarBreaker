@@ -1146,6 +1146,7 @@ not serialized.
 | `generated_confidence` | u8 or null | 0–100 score of how completely the binding resolved (content canvas, image source, record name, helper name). |
 | `ui_screen_aspect_w_over_h` | f32 or null | Physical aspect (width / height) of the screen mesh's render-target faces (`ui_pipeline/screen_aspect.rs`). It drives the render proportions of physical and radar screens; `null` when the mesh can't be measured. |
 | `source_item_type` | string or null | Item type (`SAttachableComponentParams.AttachDef.Type`) of the entity whose UI component this is: `Display` for display items (vehicle MFDs and physical screens, HUD projectors, radar displays, signage screens such as `SCItemDisplayScreen`), `ControlPanel` for door and light panels, `Usable`, and so on. On an interior placement with an inline `.soc` canvas it is the placement's entity class's type (the inline canvas replaces the content, not the entity). `null` when that entity is not an attachable item (transit panels) or its record is unresolved. It tells an operating panel from a display without names; `binding_kind` alone cannot (a `physical` binding may be a door pad or a cockpit gauge), and neither can the carrying entity (a geometry-less child's binding is carried by its parent). Not part of the render identity. |
+| `source_owner_resolved` | bool | Whether that entity was resolved to its DataCore record. `false` (an inline-canvas placement with no entity class) means `source_item_type` is unknown, as opposed to `null` for a resolved owner that is not an attachable item. |
 
 The `generated_*` fields are filled only when the render succeeds; a failed
 render logs a warning and leaves them `null`.
@@ -1225,7 +1226,7 @@ powered-off screen).
 
 The SC_UE_ModelViewer Unreal importer (scviewer WP-I1) binds an image only to an
 operating panel's screen: a `physical` binding whose `source_item_type` is not
-`Display`, not `default_state_is_off`. It assigns per face: a binding whose
+`Display` and whose owner is resolved (`source_owner_resolved`), not `default_state_is_off`. It assigns per face: a binding whose
 `helper_name` names a node of the mesh owns that node's subtree, the others own
 the faces no helper claims, and a material slot whose faces resolve to different
 outcomes stays dark. A binding without the `source_item_type` key (an older

@@ -906,6 +906,7 @@ fn interior_ui_bindings_for_mesh(
             super::child_payload::ui_binding_for_building_blocks_canvas(db, canvas_guid)
     {
         // The inline canvas overrides the class's content, not what the entity is.
+        binding.source_owner_resolved = source.is_some();
         binding.source_item_type = source.and_then(|(record, _)| {
             super::child_payload::entity_record_attach_def_type(db, record)
         });
@@ -1683,6 +1684,14 @@ mod tests {
         let lift = super::interior_ui_bindings_for_mesh(&db, &mesh(None, Some("TransitInteractionUIPanel_Elevator_Ext"), None));
         assert_eq!(lift.len(), 1);
         assert_eq!(lift[0].source_item_type, None);
+        // ... which is not the same as an owner that cannot be resolved (review fix): an inline canvas on an entity with
+        // no class carries no item type and says its owner is unknown, so a consumer can leave it dark.
+        assert!(hud[0].source_owner_resolved && door[0].source_owner_resolved && mfd[0].source_owner_resolved);
+        assert!(lift[0].source_owner_resolved);
+        let unknown = super::interior_ui_bindings_for_mesh(&db, &mesh(None, None, Some("7f9a8776-1bad-4089-a528-502477f82569")));
+        assert_eq!(unknown.len(), 1);
+        assert_eq!(unknown[0].source_item_type, None);
+        assert!(!unknown[0].source_owner_resolved);
     }
 
     fn test_ui_binding() -> UiBinding {
@@ -1718,6 +1727,7 @@ mod tests {
             generated_confidence: None,
             ui_screen_aspect_w_over_h: None,
             source_item_type: None,
+            source_owner_resolved: false,
         }
     }
 

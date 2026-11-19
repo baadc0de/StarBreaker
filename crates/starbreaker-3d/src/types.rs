@@ -853,9 +853,12 @@ pub struct UiBinding {
     /// Item type (`SAttachableComponentParams.AttachDef.Type`) of the entity whose UI component this is: `Display`
     /// for display items (vehicle MFDs and physical screens, HUD projectors, radar displays, signage screens),
     /// `ControlPanel` for door and light panels, `Usable` for usables, and so on. `None` when that entity is not an
-    /// attachable item (transit panels) or its record is unknown. Lets a consumer tell an operating panel from a
+    /// attachable item (transit panels) or its record is unresolved (then `source_owner_resolved` is false). Lets a consumer tell an operating panel from a
     /// display without names. Not part of the render identity.
     pub source_item_type: Option<String>,
+    /// Whether the entity whose UI component this is was resolved to its DataCore record. `false` (an inline-canvas
+    /// placement with no entity class) means `source_item_type` is unknown, not absent.
+    pub source_owner_resolved: bool,
 }
 
 pub struct EntityPayload {

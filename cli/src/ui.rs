@@ -283,6 +283,10 @@ fn parse_ui_binding(v: &Value) -> Option<UiBinding> {
             .and_then(|v| v.as_f64())
             .map(|n| n as f32),
         source_item_type: opt_str("source_item_type"),
+        source_owner_resolved: obj
+            .get("source_owner_resolved")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
     })
 }
 

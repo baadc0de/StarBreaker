@@ -668,6 +668,7 @@ pub(crate) fn ui_binding_for_record(db: &Database, record: &Record) -> Option<Ui
                 generated_confidence: None,
                 ui_screen_aspect_w_over_h: None,
                 source_item_type: entity_record_attach_def_type(db, record),
+                source_owner_resolved: true,
             });
         }
     }
@@ -721,6 +722,7 @@ pub(crate) fn ui_binding_for_record(db: &Database, record: &Record) -> Option<Ui
                 generated_confidence: None,
                 ui_screen_aspect_w_over_h: None,
                 source_item_type: entity_record_attach_def_type(db, record),
+                source_owner_resolved: true,
             });
         }
     }
@@ -871,6 +873,7 @@ pub(crate) fn ui_binding_for_record(db: &Database, record: &Record) -> Option<Ui
         generated_confidence: None,
         ui_screen_aspect_w_over_h: None,
         source_item_type: entity_record_attach_def_type(db, record),
+        source_owner_resolved: true,
     })
 }
 
