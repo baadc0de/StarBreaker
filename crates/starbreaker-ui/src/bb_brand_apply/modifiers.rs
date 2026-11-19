@@ -161,6 +161,18 @@ pub(super) fn apply_modifier(
                 apply_enum_field(field_name, value, node);
             }
         }
+        // A style-set localized text (the light panel's On / Auxiliary /
+        // Emergency rows). The field's `Text` is its content: stored as the
+        // node's literal `text`, the first source text resolution reads (an `@`
+        // key resolves through the registry's localization, `,P` keys
+        // included). Other localized fields keep the generic raw write below.
+        "BuildingBlocks_FieldModifierLocalization" if field_name == "Text" => {
+            if let Some(value) = value.and_then(|v| v.as_str()) {
+                node.raw
+                    .as_object_mut()
+                    .and_then(|obj| obj.insert("text".to_string(), serde_json::Value::String(value.to_string())));
+            }
+        }
         "BuildingBlocks_FieldModifierRecordRef"
         | "BuildingBlocks_FieldModifierRecordRefTypeFontStyleRecord" => {
             if let Some(value) = value.and_then(|v| v.as_str()) {

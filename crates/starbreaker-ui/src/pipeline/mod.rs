@@ -238,6 +238,22 @@ pub struct UiBindingView<'a> {
     /// `M_Physical_Screen` canvas or the SWF content-bounds heuristic. `None`
     /// keeps the prior canvas/SWF sizing; the `mfd` frame path ignores it.
     pub screen_aspect_w_over_h: Option<f32>,
+    /// Aspect (width / height) at which the render target lands on its display
+    /// face undistorted, measured in TEXTURE space (`|∂P/∂u| / |∂P/∂v|` of the
+    /// `$RenderToTexture` faces; `starbreaker-3d`
+    /// `ui_pipeline::screen_aspect::render_target_texture_aspect`). An interior
+    /// panel whose face is portrait in UV space renders portrait. When set it
+    /// sizes the target at that aspect with the authored canvas's pixel area
+    /// ([`texture_aspect_target_size`]) and takes precedence over
+    /// [`Self::screen_aspect_w_over_h`]; `None` keeps the prior sizing.
+    pub texture_aspect_w_over_h: Option<f32>,
+    /// Per-binding engine values the screen's OWNER entity pushes, pinned over
+    /// the shared registry for this render (binding path → value): its user
+    /// variables (class defaults with the placement's instance overrides — a
+    /// door pad's `ui_Hide*Controls`, `ui_LocationName`, already localized) and
+    /// the state of its interaction state machine (`state.<type>.<state>`
+    /// booleans; one render per state). Empty: the shared registry as is.
+    pub binding_values: &'a [(String, crate::canvas::Value)],
 }
 
 /// All inputs required by pipeline entrypoints.
@@ -291,31 +307,50 @@ pub struct UiRenderOutput {
 /// `SCTransitDestination` metadata via the binding's loc key.
 const TRANSIT_PANEL_LOCATION_PATH: &str = "transitdisplay.panelLocation";
 
-/// Per-binding registry overlay for a transit screen: resolve the binding's
-/// floor loc key to its LOCALIZED name and pin it at
-/// [`TRANSIT_PANEL_LOCATION_PATH`] (the engine pushes the already-localized
-/// string; `BindingsLocalizedVariable` stringifies the variable verbatim).
-/// Returns `None` for non-transit bindings so the shared registry is reused
-/// untouched — the clone (incl. the localization map) is paid only by the few
-/// transit screens per ship.
-fn transit_overlay_registry(
+/// Per-binding registry overlay. A transit screen pins its floor loc key's
+/// LOCALIZED name at [`TRANSIT_PANEL_LOCATION_PATH`] (the engine pushes the
+/// already-localized string; `BindingsLocalizedVariable` stringifies the
+/// variable verbatim), and every binding pins its owner's
+/// [`UiBindingView::binding_values`] (user variables, interaction state).
+/// Returns `None` when there is nothing to pin, so the shared registry is
+/// reused untouched — the clone (incl. the localization map) is paid only by
+/// the screens that carry per-binding values.
+fn binding_overlay_registry(
     binding: &UiBindingView<'_>,
     defaults: &DefaultValueRegistry,
 ) -> Option<DefaultValueRegistry> {
-    let key = binding.transit_location_loc_key?.trim();
-    if key.is_empty() {
+    let transit_key = binding
+        .transit_location_loc_key
+        .map(str::trim)
+        .filter(|key| !key.is_empty());
+    if transit_key.is_none() && binding.binding_values.is_empty() {
         return None;
     }
-    let localized = defaults
-        .lookup_localization(key)
-        .unwrap_or(key.trim_start_matches('@'))
-        .to_string();
     let mut overlay = defaults.clone();
-    overlay.insert_path(
-        TRANSIT_PANEL_LOCATION_PATH,
-        crate::canvas::Value::Str(localized),
-    );
+    if let Some(key) = transit_key {
+        let localized = defaults
+            .lookup_localization(key)
+            .unwrap_or(key.trim_start_matches('@'))
+            .to_string();
+        overlay.insert_path(
+            TRANSIT_PANEL_LOCATION_PATH,
+            crate::canvas::Value::Str(localized),
+        );
+    }
+    for (path, value) in binding.binding_values {
+        overlay.insert_path(path, value.clone());
+    }
     Some(overlay)
+}
+
+/// Render-target size at `aspect_w_over_h` with the pixel area of the authored
+/// target `(w, h)`: `w' × h' = w × h`, `w' / h' = aspect` (rounded, ≥ 1).
+pub(crate) fn texture_aspect_target_size(target: (u32, u32), aspect_w_over_h: f32) -> (u32, u32) {
+    let area = target.0.max(1) as f64 * target.1.max(1) as f64;
+    let aspect = aspect_w_over_h as f64;
+    let width = (area * aspect).sqrt().round().max(1.0);
+    let height = (area / aspect).sqrt().round().max(1.0);
+    (width as u32, height as u32)
 }
 
 /// Compile canonical UI IR for a binding.
@@ -338,10 +373,10 @@ pub fn compile_ir_for_binding_with(
     inputs: &PipelineInputs<'_>,
     defaults: &DefaultValueRegistry,
 ) -> Result<UiIrDocument, UiError> {
-    // A transit screen overlays its floor name onto the shared registry
-    // (per-binding value; see `transit_overlay_registry`).
-    let transit_overlay = transit_overlay_registry(inputs.binding, defaults);
-    let defaults = transit_overlay.as_ref().unwrap_or(defaults);
+    // Per-binding values (a transit floor name, the owner's user variables and
+    // state) overlay the shared registry; see `binding_overlay_registry`.
+    let binding_overlay = binding_overlay_registry(inputs.binding, defaults);
+    let defaults = binding_overlay.as_ref().unwrap_or(defaults);
     let b = inputs.binding;
 
     // Phase 6: for mfd bindings with a distinct frame canvas, compile the frame
@@ -459,9 +494,11 @@ pub fn compile_ir_for_binding_with(
     // the StandardModule tier stays the authority for widget-standard chrome
     // (tier precedence over application order — the transit button's
     // Filled-state corner geometry, ledger 106).
-    if let Some(style_id) =
-        crate::bb_resolve::modular_style_identifier(&raw_root_json, effective_manufacturer_id)
-    {
+    if let Some(style_id) = crate::bb_resolve::modular_style_identifier_with_records(
+        &raw_root_json,
+        effective_manufacturer_id,
+        &|p| inputs.canvas_fetcher.fetch_canvas_by_path(p).map_err(|e| e.to_string()),
+    ) {
         crate::bb_resolve::apply_modular_kit_sheets(
             &mut scene,
             &style_id,
@@ -512,12 +549,24 @@ pub fn compile_ir_for_binding_with(
     } else {
         None
     };
+    let texture_aspect_w_over_h = if use_frame_canvas {
+        None
+    } else {
+        b.texture_aspect_w_over_h.filter(|a| a.is_finite() && *a > 0.0)
+    };
     if let Some(aspect) = frame_aspect {
         let width = inputs.target_size.0.max(1);
         let height = ((width as f32) * aspect).round().max(1.0) as u32;
         if width <= 8192 && height <= 8192 {
             effective_target_size = (width, height);
         }
+    } else if let Some(aspect_w_over_h) = texture_aspect_w_over_h {
+        // The face's texture-space aspect IS the render target's shape (the
+        // texture maps onto the face without distortion); the authored canvas's
+        // pixel budget is kept. A `useRaw` canvas covers it like the mesh-aspect
+        // path below; `aspectOverrides*` canvases fill it (their layout reflows).
+        effective_target_size = texture_aspect_target_size(inputs.target_size, aspect_w_over_h);
+        cover_fit_mesh_aspect = true;
     } else if let Some(aspect_w_over_h) = screen_aspect_w_over_h {
         // height = width / (w/h); the mesh aspect IS the physical screen shape.
         let width = inputs.target_size.0.max(1);

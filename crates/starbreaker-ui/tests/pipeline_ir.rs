@@ -116,6 +116,8 @@ fn compile_ir_for_binding_uses_content_canvas_guid() {
         transit_location_loc_key: None,
         host_swf_path: None,
         screen_aspect_w_over_h: None,
+        texture_aspect_w_over_h: None,
+        binding_values: &[],
     };
 
     let inputs = PipelineInputs {
@@ -186,6 +188,8 @@ fn compile_ir_for_binding_matches_golden_fixture() {
         transit_location_loc_key: None,
         host_swf_path: None,
         screen_aspect_w_over_h: None,
+        texture_aspect_w_over_h: None,
+        binding_values: &[],
     };
 
     let inputs = PipelineInputs {
@@ -257,6 +261,8 @@ fn render_for_binding_ir_produces_nonempty_png() {
         transit_location_loc_key: None,
         host_swf_path: None,
         screen_aspect_w_over_h: None,
+        texture_aspect_w_over_h: None,
+        binding_values: &[],
     };
 
     let inputs = PipelineInputs {
@@ -337,6 +343,8 @@ fn render_for_binding_matches_ir_entrypoint_for_bb_canvas() {
         transit_location_loc_key: None,
         host_swf_path: None,
         screen_aspect_w_over_h: None,
+        texture_aspect_w_over_h: None,
+        binding_values: &[],
     };
 
     let inputs = PipelineInputs {
@@ -426,6 +434,8 @@ fn render_for_binding_ir_honours_canvas_style_override() {
         transit_location_loc_key: None,
         host_swf_path: None,
         screen_aspect_w_over_h: None,
+        texture_aspect_w_over_h: None,
+        binding_values: &[],
     };
 
     let inputs = PipelineInputs {

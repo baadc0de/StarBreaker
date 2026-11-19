@@ -171,7 +171,18 @@ pub(super) fn eval_bool_ref(
         serde_json::Value::Object(obj) => {
             let ty = obj.get("_Type_").and_then(|v| v.as_str()).unwrap_or("");
             match ty {
-                "_SynthBooleanParam_" => obj.get("resolvedBool").and_then(|v| v.as_bool()),
+                // A host-bound parameter (widget-standard expansion's
+                // `hostBoundInputs`: the host canvas binds its slot) takes the
+                // host binding first, as `bb_bindings` does.
+                "_SynthBooleanParam_" => obj
+                    .get("hostBoundInputs")
+                    .and_then(|v| v.as_array())
+                    .into_iter()
+                    .flatten()
+                    .find_map(|host_input| {
+                        eval_bool_ref(host_input, ptr_vals, ptr_to_op, static_vals, static_nums, param_overrides, visiting)
+                    })
+                    .or_else(|| obj.get("resolvedBool").and_then(|v| v.as_bool())),
                 "BuildingBlocks_BindingsBooleanVariable" => {
                     let binding = obj.get("binding").and_then(|v| v.as_str()).unwrap_or("");
                     Some(*static_vals.get(binding).unwrap_or(&false))

@@ -93,7 +93,8 @@ pub(crate) fn draw_node(
         }
         BbNodeType::WidgetCard
         | BbNodeType::ComponentGeneralButton
-        | BbNodeType::ComponentGeneralButtonSecondary => {
+        | BbNodeType::ComponentGeneralButtonSecondary
+        | BbNodeType::ComponentGeneralButtonLarge => {
             let fill = node_fill_rgba(node);
             if fill[3] > 0.005 {
                 fill_rect_ts(pixmap, tsk_rect, fill, alpha);

@@ -28,7 +28,7 @@ fn fallback_counter_warnings_emit_human_readable_messages() {
 /// A transit binding overlays its LOCALIZED floor name at the transit panel
 /// location path; non-transit bindings reuse the shared registry untouched.
 #[test]
-fn transit_overlay_registry_pins_localized_floor_name() {
+fn binding_overlay_registry_pins_localized_floor_name() {
     let mut defaults = DefaultValueRegistry::new();
     defaults.set_localization(std::collections::HashMap::from([(
         "ui_interactor_test_floor".to_string(),
@@ -47,8 +47,10 @@ fn transit_overlay_registry_pins_localized_floor_name() {
         transit_location_loc_key: Some("@ui_interactor_test_floor"),
         host_swf_path: None,
         screen_aspect_w_over_h: None,
+        texture_aspect_w_over_h: None,
+        binding_values: &[],
     };
-    let overlay = transit_overlay_registry(&binding, &defaults)
+    let overlay = binding_overlay_registry(&binding, &defaults)
         .expect("transit binding must produce an overlay");
     assert_eq!(
         overlay.lookup_path("transitdisplay.panelLocation"),
@@ -60,7 +62,7 @@ fn transit_overlay_registry_pins_localized_floor_name() {
         transit_location_loc_key: Some("@ui_interactor_unknown"),
         ..binding
     };
-    let overlay = transit_overlay_registry(&bare, &defaults).expect("overlay");
+    let overlay = binding_overlay_registry(&bare, &defaults).expect("overlay");
     assert_eq!(
         overlay.lookup_path("transitdisplay.panelLocation"),
         Some(&crate::canvas::Value::Str("ui_interactor_unknown".to_string())),
@@ -71,5 +73,48 @@ fn transit_overlay_registry_pins_localized_floor_name() {
         transit_location_loc_key: None,
         ..binding
     };
-    assert!(transit_overlay_registry(&none, &defaults).is_none());
+    assert!(binding_overlay_registry(&none, &defaults).is_none());
+}
+
+/// I1-5 root cause 4: the screen owner's per-binding values (its user variables
+/// with instance overrides, its interaction state) overlay the shared registry
+/// for that render only; a binding without any reuses the registry untouched.
+#[test]
+fn binding_overlay_registry_pins_the_owners_values() {
+    let defaults = DefaultValueRegistry::new();
+    let values = [
+        ("test_HideSomething".to_string(), crate::canvas::Value::Bool(true)),
+        ("state.TestState.TestOn".to_string(), crate::canvas::Value::Bool(true)),
+    ];
+    let binding = UiBindingView {
+        canvas_guid: Some("guid"),
+        content_canvas_guid: None,
+        binding_kind: Some("physical"),
+        manufacturer_id: None,
+        helper_name: None,
+        default_view_index: None,
+        default_screen_slot: None,
+        screen_name_loc_key: None,
+        transit_location_loc_key: None,
+        host_swf_path: None,
+        screen_aspect_w_over_h: None,
+        texture_aspect_w_over_h: None,
+        binding_values: &values,
+    };
+    let overlay = binding_overlay_registry(&binding, &defaults).expect("values make an overlay");
+    assert_eq!(overlay.lookup_path("test_hidesomething"), Some(&crate::canvas::Value::Bool(true)));
+    assert_eq!(overlay.lookup_path("state.teststate.teston"), Some(&crate::canvas::Value::Bool(true)));
+    assert!(defaults.lookup_path("test_HideSomething").is_none(), "the shared registry is not touched");
+}
+
+/// I1-2: a screen whose render target lands on its face at a known TEXTURE
+/// aspect (UV space) renders at that aspect with the authored canvas's pixel
+/// budget: a 16:9 canvas on a 9:16 face renders 1080 × 1920, not 1920 × 3413
+/// and not a stretched 1920 × 1080.
+#[test]
+fn texture_aspect_target_keeps_the_canvas_pixel_area() {
+    assert_eq!(texture_aspect_target_size((1920, 1080), 0.5625), (1080, 1920));
+    assert_eq!(texture_aspect_target_size((1920, 1080), 16.0 / 9.0), (1920, 1080));
+    assert_eq!(texture_aspect_target_size((1920, 1080), 1.0), (1440, 1440));
+    assert_eq!(texture_aspect_target_size((512, 740), 1.0), (616, 616));
 }

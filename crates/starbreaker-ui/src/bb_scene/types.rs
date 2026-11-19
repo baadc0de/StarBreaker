@@ -135,6 +135,10 @@ pub enum BbNodeType {
     WidgetTextField,
     ComponentGeneralButton,
     ComponentGeneralButtonSecondary,
+    /// `ComponentGeneralButtonLarge`: the large call-to-action button (a door
+    /// pad's `DoorButton`, a transit console's `Button_Call`), instantiated from
+    /// its `ButtonGeneralLargeComponentStandard` template like the other buttons.
+    ComponentGeneralButtonLarge,
     WidgetImage,
     WidgetText,
     WidgetCustomShape,
@@ -156,6 +160,7 @@ impl BbNodeType {
             "WidgetTextField" => Self::WidgetTextField,
             "ComponentGeneralButton" => Self::ComponentGeneralButton,
             "ComponentGeneralButtonSecondary" => Self::ComponentGeneralButtonSecondary,
+            "ComponentGeneralButtonLarge" => Self::ComponentGeneralButtonLarge,
             "WidgetImage" => Self::WidgetImage,
             "WidgetText" => Self::WidgetText,
             "WidgetCustomShape" => Self::WidgetCustomShape,

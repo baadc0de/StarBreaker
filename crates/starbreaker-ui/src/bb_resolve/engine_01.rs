@@ -82,6 +82,7 @@ pub fn apply_modular_kit_sheets(
         modular_linearprogress_style_path(style_id),
         modular_buttonprimary_style_path(style_id),
         modular_buttonsecondary_style_path(style_id),
+        modular_kit_style_path(style_id, "buttonlarge"),
     ];
 
     for module_path in module_paths.into_iter().flatten() {
@@ -169,6 +170,38 @@ pub fn modular_style_identifier(
             )
             .map(|brand| brand.identifier)
         })
+}
+
+/// [`modular_style_identifier`], else the manufacturer's own brand style
+/// RECORD: the first [`bb_brand_style::brand_candidate_identifiers`] identity
+/// (`s_<mfr>_<family>`, its sibling, `s_<mfr>`) that exists. A canvas whose
+/// `brandStyles` carry no entry for the manufacturer (the door pad's
+/// `I_Door_Standard` on a CRUS ship) still wears the manufacturer's style, and
+/// its modular-kit sheets (`sk_<brand>_*`) style its widget standards.
+pub fn modular_style_identifier_with_records(
+    root_json: &serde_json::Value,
+    manufacturer_id: Option<&str>,
+    fetch_by_path: &dyn Fn(&str) -> Result<serde_json::Value, String>,
+) -> Option<String> {
+    modular_style_identifier(root_json, manufacturer_id).or_else(|| {
+        manufacturer_brand_record_identifier(root_json, manufacturer_id, fetch_by_path)
+    })
+}
+
+fn manufacturer_brand_record_identifier(
+    root_json: &serde_json::Value,
+    manufacturer_id: Option<&str>,
+    fetch_by_path: &dyn Fn(&str) -> Result<serde_json::Value, String>,
+) -> Option<String> {
+    let record_value = root_json.get("_RecordValue_").unwrap_or(root_json);
+    let canvas_name = root_json
+        .get("_RecordName_")
+        .and_then(|v| v.as_str())
+        .or_else(|| record_value.get("_RecordName_").and_then(|v| v.as_str()));
+    let class = bb_brand_style::brand_class_for_canvas(canvas_name);
+    bb_brand_style::brand_candidate_identifiers(None, manufacturer_id, class, bb_brand_style::BrandPolicy::Default)
+        .into_iter()
+        .find(|candidate| fetch_by_path(candidate).is_ok())
 }
 
 /// Framework record path of a modular-kit component style sheet: the style
@@ -1720,7 +1753,9 @@ fn resolve_canvas_graph_inner(
     if let Some(style_id) = modular_style_id.as_deref() {
         apply_modular_kit_sheets(&mut scene, style_id, fetch_by_path, loc_fetcher);
     }
-    finalize_widget_standard_fields(&mut scene, &Default::default());
+    // The expanded templates' bound fields resolve against the render's values (a door pad's
+    // `state.*` pins, its user variables): a host-bound parameter follows the host's binding.
+    finalize_widget_standard_fields(&mut scene, defaults);
 
     // `exportNode: false` marks editor-only authored nodes (mock layout
     // images, "...DEL"/"(Old)"/"TEST" leftovers, ambient-greeble groups like

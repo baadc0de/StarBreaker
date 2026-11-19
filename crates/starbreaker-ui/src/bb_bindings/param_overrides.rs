@@ -74,7 +74,7 @@ impl BindingResolver {
     /// True when `ptr` is a `Bindings*Variable` op whose binding path has no
     /// default-registry entry — wired to an engine variable that is unbound in
     /// a static render.
-    fn input_is_unbound_variable(&self, ptr: BbNodeId, defaults: &DefaultValueRegistry) -> bool {
+    pub(super) fn input_is_unbound_variable(&self, ptr: BbNodeId, defaults: &DefaultValueRegistry) -> bool {
         let Some(op) = self.ptr_to_op.get(&ptr) else {
             return false;
         };

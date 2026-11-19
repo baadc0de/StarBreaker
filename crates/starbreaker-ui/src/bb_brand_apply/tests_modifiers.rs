@@ -553,3 +553,46 @@ fn style_provenance_helpers_track_the_winning_field_source() {
     assert_eq!(provenance_field(&colour), Some("BackgroundColor"));
     assert_eq!(provenance_field(&padding), None, "non-colour/visibility fields are not tracked");
 }
+
+/// I1-5 root cause 2: a style sets a text field's content with a
+/// `FieldModifierLocalization` on `Text` (the light panel's rows: the
+/// `TextFieldElementInstance` entries set On / Auxiliary / Emergency). The
+/// styled key is the field's text even when the field is a component label
+/// whose own parameter is empty (`@LOC_EMPTY` on the host buttons). Synthetic
+/// keys only.
+#[test]
+fn localization_modifier_on_text_sets_the_fields_text() {
+    let mut scene = make_test_scene();
+    {
+        let node = scene.nodes.get_mut(&1).unwrap();
+        node.ty = crate::bb_scene::BbNodeType::WidgetTextField;
+        node.raw = json!({
+            "labelProperties": {
+                "_Type_": "BuildingBlocks_ComponentLabelProperties",
+                "show": true, "label": "@test_empty", "caseModifier": "None"
+            }
+        });
+    }
+    scene.operations = vec![
+        json!({"_Pointer_": "ptr:3", "_Type_": "_SynthLocalizedParam_", "resolvedLocKey": "@test_empty"}),
+        json!({"_Type_": "BuildingBlocks_BindingsLocalizedField",
+               "widget": "_PointsTo_:ptr:1", "field": "ParamInput0", "input": "_PointsTo_:ptr:3"}),
+    ];
+    let brand = BrandStyle {
+        identifier: "test_brand".to_string(),
+        entries: &[json!({
+            "modifiers": [
+                {"_Type_": "BuildingBlocks_FieldModifierLocalization", "field": "Text", "value": "@test_row_label"}
+            ]
+        })],
+        raw: &json!({}),
+    };
+    apply_brand_modifiers(&mut scene, &brand, None);
+
+    let mut defaults = crate::defaults::DefaultValueRegistry::new();
+    defaults.insert_localization("test_empty", String::new());
+    defaults.insert_localization("test_row_label", "row".to_string());
+    let resolver = crate::bb_bindings::BindingResolver::from_operations(&scene.operations);
+    let node = scene.nodes.get(&1).unwrap();
+    assert_eq!(resolver.resolve_text(1, &node.raw, &defaults), "row");
+}

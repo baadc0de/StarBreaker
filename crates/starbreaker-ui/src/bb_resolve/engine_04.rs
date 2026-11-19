@@ -1441,6 +1441,16 @@ fn button_general_component_standard_path() -> &'static str {
     "file://./../../../../../../../libs/foundry/records/ui/buildingblocks/modularkit/standard/components/buttongeneralcomponentstandard.json"
 }
 
+/// Framework record path of the LARGE general-button component standard (a door
+/// pad's main button, a transit console's call button).
+fn button_large_component_standard_path() -> &'static str {
+    "file://./../../../../../../../libs/foundry/records/ui/buildingblocks/modularkit/standard/components/buttongenerallargecomponentstandard.json"
+}
+
+/// Raw marker on a button host whose expanded template instance draws its label
+/// (the IR gives the host itself no text).
+pub(crate) const LABEL_INSTANCED_KEY: &str = "_LabelInstanced_";
+
 /// Framework record path of the tag database.
 fn tag_database_path() -> &'static str {
     "file://./../../../../../../../libs/foundry/records/tagdatabase/tagdatabase.tagdatabase.json"
@@ -1454,6 +1464,7 @@ fn implicit_host_tag_name(ty: &BbNodeType) -> Option<&'static str> {
         BbNodeType::WidgetIcon => Some("icon"),
         BbNodeType::ComponentGeneralButton => Some("general-button-primary"),
         BbNodeType::ComponentGeneralButtonSecondary => Some("general-button-secondary"),
+        BbNodeType::ComponentGeneralButtonLarge => Some("general-button-large"),
         _ => None,
     }
 }
@@ -1514,10 +1525,14 @@ fn inject_standard_params(
         let Some(ptr) = op.get("_Pointer_").and_then(|v| v.as_str()).map(str::to_owned) else {
             continue;
         };
+        // The host field slot this parameter reads (`ParamInputN`): a host
+        // canvas binding on that slot overrides the authored value
+        // (`wire_host_bound_params`).
+        let parameter = op.get("parameter").cloned().unwrap_or(serde_json::Value::Null);
         if let Some(map) = op.as_object_mut() {
             map.insert("_HostNodeId_".to_string(), serde_json::json!(host_id));
         }
-        let synth = match value {
+        let mut synth = match value {
             ParamValue::Int(value) => serde_json::json!({
                 "_Type_": "_SynthIntegerParam_",
                 "_Pointer_": ptr,
@@ -1549,9 +1564,86 @@ fn inject_standard_params(
                 "resolvedLocKey": key,
             }),
         };
+        if let Some(map) = synth.as_object_mut() {
+            map.insert("parameter".to_string(), parameter);
+        }
         synthetics.push(synth);
     }
     child_scene.operations.extend(synthetics);
+}
+
+/// The host field-op family a synthetic component parameter of `synth_type`
+/// reads from: the engine routes a host widget's bound `ParamInputN` of the
+/// parameter's value type into the template's component parameter.
+fn host_field_family_for_synth(synth_type: &str) -> Option<&'static [&'static str]> {
+    match synth_type {
+        "_SynthLocalizedParam_" => Some(&["BuildingBlocks_BindingsLocalizedField"]),
+        "_SynthBooleanParam_" => Some(&["BuildingBlocks_BindingsBooleanField"]),
+        "_SynthIntegerParam_" => Some(&["BuildingBlocks_BindingsIntegerField"]),
+        "_SynthNumberParam_" => Some(&["BuildingBlocks_BindingsNumberField"]),
+        "_SynthStringParam_" => Some(&["BuildingBlocks_BindingsStringField"]),
+        _ => None,
+    }
+}
+
+/// Route the host canvas's bindings on a button's parameter slots into the
+/// expanded template's parameters (the engine's component-property routing at
+/// run time): a door pad binds its large button's `ParamInput0` label to the
+/// door state (OPEN / CLOSE / LOCKED) and `ParamInput0` / `ParamInput1`
+/// booleans to the label / icon visibility. Each synthetic parameter of
+/// `host_id` whose slot the host binds with an op of the parameter's family
+/// gets `hostBoundInputs` (the bound ops' inputs, in authored order); the
+/// resolver evaluates them first and falls back to the authored value
+/// (`resolved*`) when none yields one. Runs after the merge, so the input
+/// pointers are in the scene's own namespace and are remapped with it later.
+fn wire_host_bound_params(scene: &mut BbScene, host_id: BbNodeId) {
+    let widget = format!("_PointsTo_:ptr:{host_id}");
+    let host_fields: Vec<(String, String, serde_json::Value)> = scene
+        .operations
+        .iter()
+        .filter(|op| op.get("widget").and_then(|v| v.as_str()) == Some(widget.as_str()))
+        .filter_map(|op| {
+            Some((
+                op.get("_Type_")?.as_str()?.to_string(),
+                op.get("field")?.as_str()?.to_string(),
+                op.get("input").filter(|v| v.is_string())?.clone(),
+            ))
+        })
+        .collect();
+    if host_fields.is_empty() {
+        return;
+    }
+    let mut label_bound = false;
+    for op in &mut scene.operations {
+        if op.get("_HostNodeId_").and_then(|v| v.as_u64()) != Some(host_id as u64) {
+            continue;
+        }
+        let Some(family) = op.get("_Type_").and_then(|v| v.as_str()).and_then(host_field_family_for_synth) else {
+            continue;
+        };
+        let Some(parameter) = op.get("parameter").and_then(|v| v.as_str()).map(str::to_owned) else {
+            continue;
+        };
+        let inputs: Vec<serde_json::Value> = host_fields
+            .iter()
+            .filter(|(ty, field, _)| family.contains(&ty.as_str()) && *field == parameter)
+            .map(|(_, _, input)| input.clone())
+            .collect();
+        if !inputs.is_empty()
+            && let Some(map) = op.as_object_mut()
+        {
+            label_bound |= map.get("_Type_").and_then(|v| v.as_str()) == Some("_SynthLocalizedParam_");
+            map.insert("hostBoundInputs".to_string(), serde_json::Value::Array(inputs));
+        }
+    }
+    // The host canvas binds the label (the door pad's OPEN / CLOSE): the instance
+    // now draws it, so the host itself draws no text — it would resolve the same
+    // binding and draw it twice, at its own uncentred rect.
+    if label_bound
+        && let Some(raw) = scene.nodes.get_mut(&host_id).and_then(|host| host.raw.as_object_mut())
+    {
+        raw.insert(LABEL_INSTANCED_KEY.to_string(), serde_json::Value::Bool(true));
+    }
 }
 
 /// The host's effective custom-icon path: an authored `customIcon`, else the
@@ -1660,18 +1752,26 @@ fn for_each_expanded_instance(
 /// `Label` parameter, but the case transform is read from the field's own raw
 /// (`case_modifier_from_raw`) — the template authors `None`, so without this
 /// the host's `Upper` (e.g. CALL ELEVATOR) renders mixed-case.
+/// The host's authored `labelProperties.style` (the template's `LabelStyle`
+/// parameter: a door pad's `Title4` large-button label) is forwarded the same
+/// way; the instance's authored style is the template default.
 fn forward_host_label_case(scene: &mut BbScene, host_id: BbNodeId) {
     let Some(host) = scene.nodes.get(&host_id) else {
         return;
     };
-    let Some(case) = host
-        .raw
-        .get("labelProperties")
-        .and_then(|lp| lp.get("caseModifier"))
-        .cloned()
-    else {
+    let host_label = host.raw.get("labelProperties");
+    let forwarded: Vec<(&str, serde_json::Value)> = ["caseModifier", "style"]
+        .into_iter()
+        .filter_map(|key| {
+            host_label
+                .and_then(|lp| lp.get(key))
+                .filter(|v| v.as_str().is_some_and(|s| !s.is_empty()))
+                .map(|v| (key, v.clone()))
+        })
+        .collect();
+    if forwarded.is_empty() {
         return;
-    };
+    }
     for_each_expanded_instance(scene, host_id, |node| {
         if !matches!(node.ty, BbNodeType::WidgetTextField) {
             return;
@@ -1685,7 +1785,9 @@ fn forward_host_label_case(scene: &mut BbScene, host_id: BbNodeId) {
             })
             .and_then(|v| v.as_object_mut())
         {
-            lp.insert("caseModifier".to_string(), case.clone());
+            for (key, value) in &forwarded {
+                lp.insert(key.to_string(), value.clone());
+            }
         }
     });
 }
@@ -1777,6 +1879,7 @@ pub(crate) fn expand_widget_standards(
                 BbNodeType::WidgetIcon
                     | BbNodeType::ComponentGeneralButton
                     | BbNodeType::ComponentGeneralButtonSecondary
+                    | BbNodeType::ComponentGeneralButtonLarge
             ) || is_scrollbar_component(&node.ty))
                 && node.is_active
         })
@@ -1803,6 +1906,7 @@ pub(crate) fn expand_widget_standards(
         let template_path = match host_ty {
             BbNodeType::WidgetIcon => icon_widget_standard_path(),
             BbNodeType::ComponentGeneralButton => button_general_component_standard_path(),
+            BbNodeType::ComponentGeneralButtonLarge => button_large_component_standard_path(),
             BbNodeType::ComponentGeneralButtonSecondary => {
                 button_secondary_component_standard_path()
             }
@@ -1847,7 +1951,8 @@ pub(crate) fn expand_widget_standards(
                 params
             }
             BbNodeType::ComponentGeneralButton
-            | BbNodeType::ComponentGeneralButtonSecondary => {
+            | BbNodeType::ComponentGeneralButtonSecondary
+            | BbNodeType::ComponentGeneralButtonLarge => {
                 let mut params = vec![
                     ("FillStyle", ParamValue::Int(button_fill_style_index(host))),
                     ("ShowIcon", ParamValue::Bool(icon_properties_show(host))),
@@ -1907,7 +2012,9 @@ pub(crate) fn expand_widget_standards(
         // fill and the button renders as bare text.
         if matches!(
             host_ty,
-            BbNodeType::ComponentGeneralButton | BbNodeType::ComponentGeneralButtonSecondary
+            BbNodeType::ComponentGeneralButton
+                | BbNodeType::ComponentGeneralButtonSecondary
+                | BbNodeType::ComponentGeneralButtonLarge
         ) {
             collected_embedded_entries.extend(template_embedded_style_entries(&template_json));
         }
@@ -1919,10 +2026,13 @@ pub(crate) fn expand_widget_standards(
         // instance; reproduce that flow onto the merged instance nodes.
         if matches!(
             host_ty,
-            BbNodeType::ComponentGeneralButton | BbNodeType::ComponentGeneralButtonSecondary
+            BbNodeType::ComponentGeneralButton
+                | BbNodeType::ComponentGeneralButtonSecondary
+                | BbNodeType::ComponentGeneralButtonLarge
         ) {
             forward_host_icon_identity(scene, host_id);
             forward_host_label_case(scene, host_id);
+            wire_host_bound_params(scene, host_id);
             // The engine nests each instance widget's OWN standard (icon /
             // text-field widget standards), whose inner element carries the
             // `*-element-instance` styling tag the modular-kit button sheets
@@ -1961,6 +2071,7 @@ pub(crate) fn expand_widget_standards(
                 BbNodeType::WidgetIcon
                     | BbNodeType::ComponentGeneralButton
                     | BbNodeType::ComponentGeneralButtonSecondary
+                    | BbNodeType::ComponentGeneralButtonLarge
             ) && let Some(icon) = host.icon.as_mut()
             {
                 icon.image_record = None;
@@ -1970,7 +2081,9 @@ pub(crate) fn expand_widget_standards(
             // label key or the text draws twice at slightly different rects.
             if matches!(
                 host_ty,
-                BbNodeType::ComponentGeneralButton | BbNodeType::ComponentGeneralButtonSecondary
+                BbNodeType::ComponentGeneralButton
+                | BbNodeType::ComponentGeneralButtonSecondary
+                | BbNodeType::ComponentGeneralButtonLarge
             ) && let Some(lp) = host
                 .raw
                 .get_mut("labelProperties")
@@ -2301,494 +2414,7 @@ pub(crate) fn apply_scrollbar_modular_styles(
     );
 }
 
-// Tests for widget-standard template expansion (see
-// widget_standard_expansion.part): host icon forwarding into the button
-// template's icon instance and host parse-time fallback clearing.
+// Tests for widget-standard template expansion.
 #[cfg(test)]
-mod tests_expansion {
-    #![allow(unused_imports, dead_code)]
-
-    use super::*;
-
-    fn tag_database_fixture() -> serde_json::Value {
-        serde_json::json!({
-            "tags": [
-                {"tagName": "canvas-proxy-root", "_RecordId_": "21788313-6aff-45b4-a3ad-fdc62b1cf849"},
-                {"tagName": "general-button-secondary", "_RecordId_": "cf236683-1f17-41ee-a0d2-0e23c5f1c552"},
-                {"tagName": "icon", "_RecordId_": "8b9ef179-0000-0000-0000-000000000000"}
-            ]
-        })
-    }
-
-    /// Minimal stand-in for `buttongeneralsecondarycomponentstandard`:
-    /// ComponentRoot (proxy-root tagged) hosting a `WidgetIcon` instance whose
-    /// authored preset is the template default (`ArrowHollowRight`).
-    fn button_template_fixture() -> serde_json::Value {
-        serde_json::json!({
-            "_RecordName_": "BuildingBlocks_Canvas.ButtonGeneralSecondaryComponentStandard",
-            "_RecordId_": "00000000-0000-0000-0000-00000000b001",
-            "_RecordValue_": {
-                "_Type_": "BuildingBlocks_Canvas",
-                "size": {"_Type_": "Vec3", "x": 64.0, "y": 64.0, "z": 0.0},
-                "scene": [
-                    {
-                        "_Pointer_": "ptr:1", "_Type_": "BuildingBlocks_DisplayWidget",
-                        "name": "ComponentRoot",
-                        "styleTags": [{"_RecordId_": "21788313-6aff-45b4-a3ad-fdc62b1cf849"}]
-                    },
-                    {
-                        "_Pointer_": "ptr:8", "_Type_": "BuildingBlocks_WidgetIcon",
-                        "name": "IconWidgetInstance", "parent": "_PointsTo_:ptr:1",
-                        "iconProperties": {
-                            "_Type_": "BuildingBlocks_ComponentIconProperties",
-                            "show": true, "iconPreset": "ArrowHollowRight", "customIcon": ""
-                        }
-                    }
-                ],
-                "operations": [
-                    {
-                        "_Pointer_": "ptr:30",
-                        "_Type_": "BuildingBlocks_BindingsNumberComponentParameter",
-                        "name": "Icon AnchorToParentX", "parameter": "ParamInput0",
-                        "defaultValue": 0.0
-                    },
-                    {
-                        "_Pointer_": "ptr:31",
-                        "_Type_": "BuildingBlocks_BindingsNumberComponentParameter",
-                        "name": "Icon AnchorToParentY", "parameter": "ParamInput1",
-                        "defaultValue": 0.0
-                    }
-                ]
-            }
-        })
-    }
-
-    /// Host canvas: a `ComponentGeneralButtonSecondary` authored with the
-    /// medical close button's icon contract (show=true, preset `GeneralX`).
-    fn button_host_scene() -> BbScene {
-        let canvas = serde_json::json!({
-            "_RecordName_": "test_button_host",
-            "_RecordId_": "00000000-0000-0000-0000-00000000c001",
-            "_RecordValue_": {
-                "_Type_": "BuildingBlocks_Canvas",
-                "size": {"_Type_": "Vec3", "x": 1920.0, "y": 1080.0, "z": 0.0},
-                "scene": [
-                    {"_Pointer_": "ptr:1", "_Type_": "BuildingBlocks_DisplayWidget", "name": "root"},
-                    {
-                        "_Pointer_": "ptr:2",
-                        "_Type_": "BuildingBlocks_ComponentGeneralButtonSecondary",
-                        "name": "ExitBed", "parent": "_PointsTo_:ptr:1",
-                        "fillStyle": "Ghost",
-                        "iconProperties": {
-                            "_Type_": "BuildingBlocks_ComponentIconProperties",
-                            "show": true, "iconPreset": "GeneralX", "customIcon": "",
-                            "anchorToParentX": 0.5, "anchorToParentY": 0.5
-                        },
-                        "labelProperties": {
-                            "_Type_": "BuildingBlocks_ComponentLabelProperties",
-                            "show": false, "label": "@LOC_PLACEHOLDER"
-                        }
-                    }
-                ],
-                "operations": []
-            }
-        });
-        parse_bb_canvas(&canvas).expect("host canvas should parse")
-    }
-
-    fn expansion_fetcher(path: &str) -> Result<serde_json::Value, String> {
-        if path == tag_database_path() {
-            Ok(tag_database_fixture())
-        } else if path == button_secondary_component_standard_path() {
-            Ok(button_template_fixture())
-        } else {
-            Err(format!("test fetcher: no record for '{path}'"))
-        }
-    }
-
-    /// The engine routes a button's authored `iconProperties` through the
-    /// template's IconPreset/CustomIcon parameters into its icon instance:
-    /// the merged `IconWidgetInstance` must carry the HOST's glyph identity,
-    /// not the template's authored default.
-    #[test]
-    fn button_expansion_forwards_host_icon_identity_to_icon_instance() {
-        let mut scene = button_host_scene();
-        expand_widget_standards(&mut scene, &expansion_fetcher);
-
-        let icon_instance = scene
-            .nodes
-            .values()
-            .find(|n| matches!(n.ty, BbNodeType::WidgetIcon) && n.id >= EXPANSION_ID_BASE)
-            .expect("expansion should merge the template's WidgetIcon instance");
-        assert_eq!(
-            icon_instance
-                .raw
-                .get("iconProperties")
-                .and_then(|p| p.get("iconPreset"))
-                .and_then(|v| v.as_str()),
-            Some("GeneralX"),
-            "icon instance must inherit the host button's authored iconPreset"
-        );
-        assert_eq!(
-            host_icon_path(icon_instance),
-            crate::icon_preset::svg_path_for_preset("GeneralX"),
-            "forwarded preset must resolve to the host glyph's vector asset"
-        );
-        // Assert the layer the RENDERER reads: forwarding only `raw` while the
-        // parse-time `BbIcon` kept the template default passed the raw-level
-        // assertion but drew the wrong glyph (ledger 103).
-        let baked = icon_instance
-            .icon
-            .as_ref()
-            .expect("merged icon instance must carry a parse-time BbIcon");
-        assert_eq!(
-            baked.image_record,
-            crate::icon_preset::svg_path_for_preset("GeneralX"),
-            "the baked BbIcon must resolve the forwarded preset, not the template default"
-        );
-    }
-
-    /// The expanded instance renders the glyph; the host's parse-time icon
-    /// fallback must be cleared or the glyph draws twice.
-    #[test]
-    fn button_expansion_clears_host_icon_fallback() {
-        let mut scene = button_host_scene();
-        expand_widget_standards(&mut scene, &expansion_fetcher);
-
-        let host = scene
-            .nodes
-            .values()
-            .find(|n| matches!(n.ty, BbNodeType::ComponentGeneralButtonSecondary))
-            .expect("host should survive expansion");
-        assert!(
-            host.icon.as_ref().is_none_or(|icon| icon.image_record.is_none()),
-            "button host parse-time icon fallback must be cleared after expansion"
-        );
-    }
-
-    /// The templates derive the icon instance's ANCHOR from the host's
-    /// authored `iconProperties.anchorToParentX/Y` through the "Icon
-    /// AnchorToParent*" component parameters; an unwired parameter defaults
-    /// 0.0 and the template op graph (f(param) − 1 + switch) yields −1,
-    /// throwing the icon out of the button (the medbed close ✕ rendered left
-    /// of its square). The expansion must inject the authored numbers.
-    #[test]
-    fn button_expansion_injects_host_anchor_to_parent_params() {
-        let mut scene = button_host_scene();
-        expand_widget_standards(&mut scene, &expansion_fetcher);
-
-        let synth: Vec<_> = scene
-            .operations
-            .iter()
-            .filter(|op| op.get("_Type_").and_then(|v| v.as_str()) == Some("_SynthNumberParam_"))
-            .collect();
-        assert_eq!(synth.len(), 2, "both icon anchor params injected: {synth:?}");
-        for op in synth {
-            assert_eq!(
-                op.get("resolvedNumber").and_then(|v| v.as_f64()),
-                Some(0.5),
-                "the host's authored anchorToParent 0.5 must reach the parameter"
-            );
-        }
-    }
-
-    /// Host canvas: a PRIMARY `ComponentGeneralButton` authored with the
-    /// transit call-console's contract (fillStyle `Filled`, double-caret icon
-    /// above an `@ui_interactor_call_elevator` label).
-    fn primary_button_host_scene() -> BbScene {
-        let canvas = serde_json::json!({
-            "_RecordName_": "test_primary_button_host",
-            "_RecordId_": "00000000-0000-0000-0000-00000000c002",
-            "_RecordValue_": {
-                "_Type_": "BuildingBlocks_Canvas",
-                "size": {"_Type_": "Vec3", "x": 512.0, "y": 740.0, "z": 0.0},
-                "scene": [
-                    {"_Pointer_": "ptr:1", "_Type_": "BuildingBlocks_DisplayWidget", "name": "root"},
-                    {
-                        "_Pointer_": "ptr:2",
-                        "_Type_": "BuildingBlocks_ComponentGeneralButton",
-                        "name": "Button_Call", "parent": "_PointsTo_:ptr:1",
-                        "fillStyle": "Filled",
-                        "iconPosition": "Top",
-                        "iconProperties": {
-                            "_Type_": "BuildingBlocks_ComponentIconProperties",
-                            "show": true, "iconPreset": "ArrowCaratDoubleUp", "customIcon": ""
-                        },
-                        "labelProperties": {
-                            "_Type_": "BuildingBlocks_ComponentLabelProperties",
-                            "show": true, "label": "@ui_interactor_call_elevator"
-                        }
-                    }
-                ],
-                "operations": []
-            }
-        });
-        parse_bb_canvas(&canvas).expect("host canvas should parse")
-    }
-
-    fn primary_expansion_fetcher(path: &str) -> Result<serde_json::Value, String> {
-        if path == tag_database_path() {
-            Ok(tag_database_fixture())
-        } else if path == button_general_component_standard_path() {
-            Ok(button_template_fixture())
-        } else {
-            Err(format!("test fetcher: no record for '{path}'"))
-        }
-    }
-
-    /// A PRIMARY `ComponentGeneralButton` (e.g. a transit console's CALL
-    /// ELEVATOR button) expands through its component standard exactly like
-    /// the secondary variant: the merged icon instance carries the HOST's
-    /// authored glyph identity.
-    #[test]
-    fn primary_button_expansion_forwards_host_icon_identity() {
-        let mut scene = primary_button_host_scene();
-        expand_widget_standards(&mut scene, &primary_expansion_fetcher);
-
-        let icon_instance = scene
-            .nodes
-            .values()
-            .find(|n| matches!(n.ty, BbNodeType::WidgetIcon) && n.id >= EXPANSION_ID_BASE)
-            .expect("expansion should merge the primary standard's WidgetIcon instance");
-        assert_eq!(
-            icon_instance
-                .raw
-                .get("iconProperties")
-                .and_then(|p| p.get("iconPreset"))
-                .and_then(|v| v.as_str()),
-            Some("ArrowCaratDoubleUp"),
-            "icon instance must inherit the primary host's authored iconPreset"
-        );
-        // Assert the layer the RENDERER reads (ledger 103): the parse-time
-        // `BbIcon` bakes the preset→SVG resolution, so a raw-only forward
-        // passes the assertion above while still drawing the template glyph.
-        let baked = icon_instance
-            .icon
-            .as_ref()
-            .expect("merged icon instance must carry a parse-time BbIcon");
-        assert_eq!(
-            baked.image_record,
-            crate::icon_preset::svg_path_for_preset("ArrowCaratDoubleUp"),
-            "the baked BbIcon must resolve the forwarded preset, not the template default"
-        );
-    }
-
-    /// Minimal stand-in for `scrollbarhorizontalcomponentstandard`: an
-    /// inactive proxy-tagged `ComponentRoot` hosting the thumb, with the
-    /// authored `_SizeRatio` → `SizeX` and `_Show` → `scrollbar-show` →
-    /// `SecondaryStateTag` op chains and the `RootShow` embedded style.
-    fn scrollbar_template_fixture() -> serde_json::Value {
-        serde_json::json!({
-            "_RecordName_": "BuildingBlocks_Canvas.ScrollBarHorizontalComponentStandard",
-            "_RecordId_": "00000000-0000-0000-0000-00000000sb01",
-            "_RecordValue_": {
-                "_Type_": "BuildingBlocks_Canvas",
-                "size": {"_Type_": "Vec3", "x": 1920.0, "y": 1080.0, "z": 0.0},
-                "embeddedStyles": [
-                    {
-                        "_Type_": "BuildingBlocks_StyleEntry",
-                        "name": "RootShow",
-                        "conditionsList": [
-                            {"conditions": [
-                                {"_Type_": "BuildingBlocks_StyleSelectorConditionTag",
-                                 "tag": {"_RecordId_": "e02a2290-9d6c-46f9-8235-4e828d804cee"}}
-                            ]}
-                        ],
-                        "modifiers": [
-                            {"_Type_": "BuildingBlocks_FieldModifierBoolean",
-                             "field": "IsActive", "value": true}
-                        ]
-                    }
-                ],
-                "scene": [
-                    {
-                        "_Pointer_": "ptr:1", "_Type_": "BuildingBlocks_DisplayWidget",
-                        "name": "ComponentRoot", "isActive": false,
-                        "styleTags": [{"_RecordId_": "21788313-6aff-45b4-a3ad-fdc62b1cf849"}]
-                    },
-                    {
-                        "_Pointer_": "ptr:2", "_Type_": "BuildingBlocks_DisplayWidget",
-                        "name": "BarElementInstance", "parent": "_PointsTo_:ptr:1",
-                        "styleTags": [{"_RecordId_": "9ca447ec-f238-4751-9f22-440db0c25cb2"}]
-                    }
-                ],
-                "operations": [
-                    {"_Type_": "BuildingBlocks_BindingsNumberField",
-                     "widget": "_PointsTo_:ptr:2", "field": "SizeX", "input": "_PointsTo_:ptr:3"},
-                    {"_Pointer_": "ptr:3",
-                     "_Type_": "BuildingBlocks_BindingsNumberComponentParameter",
-                     "name": "_SizeRatio", "parameter": "ParamInput1", "defaultValue": 0.0},
-                    {"_Pointer_": "ptr:5",
-                     "_Type_": "BuildingBlocks_BindingsBooleanComponentParameter",
-                     "name": "_Show", "parameter": "ParamInput1", "defaultValue": false},
-                    {"_Pointer_": "ptr:6", "_Type_": "BuildingBlocks_BindingsTagFromBoolean",
-                     "isTrue": {"_RecordId_": "e02a2290-9d6c-46f9-8235-4e828d804cee"},
-                     "isFalse": null, "input": "_PointsTo_:ptr:5"},
-                    {"_Type_": "BuildingBlocks_BindingsStringField",
-                     "widget": "_PointsTo_:ptr:1", "field": "SecondaryStateTag",
-                     "input": "_PointsTo_:ptr:6"}
-                ]
-            }
-        })
-    }
-
-    /// Host canvas mirroring the power screen's wiring: a clipping
-    /// `Scrollview` and a `ComponentScrollBar` targeting it.
-    fn scrollbar_host_scene() -> BbScene {
-        let canvas = serde_json::json!({
-            "_RecordName_": "test_scrollbar_host",
-            "_RecordId_": "00000000-0000-0000-0000-00000000c002",
-            "_RecordValue_": {
-                "_Type_": "BuildingBlocks_Canvas",
-                "size": {"_Type_": "Vec3", "x": 1920.0, "y": 1080.0, "z": 0.0},
-                "scene": [
-                    {"_Pointer_": "ptr:1", "_Type_": "BuildingBlocks_DisplayWidget", "name": "root"},
-                    {"_Pointer_": "ptr:2", "_Type_": "BuildingBlocks_DisplayWidget",
-                     "name": "Scrollview", "parent": "_PointsTo_:ptr:1",
-                     "overflow": {"_Type_": "BuildingBlocks_Overflow", "overflow": "Clip"}},
-                    {"_Pointer_": "ptr:4", "_Type_": "BuildingBlocks_ComponentScrollBar",
-                     "name": "ListScroll", "parent": "_PointsTo_:ptr:1",
-                     "direction": "Horizontal", "target": "_PointsTo_:ptr:2"}
-                ],
-                "operations": []
-            }
-        });
-        parse_bb_canvas(&canvas).expect("host canvas should parse")
-    }
-
-    fn scrollbar_fetcher(path: &str) -> Result<serde_json::Value, String> {
-        if path == tag_database_path() {
-            Ok(tag_database_fixture())
-        } else if path.contains("scrollbarhorizontalcomponentstandard") {
-            Ok(scrollbar_template_fixture())
-        } else {
-            Err(format!("test fetcher: no record for '{path}'"))
-        }
-    }
-
-    /// Expansion must pair the template's thumb with the host's `target`
-    /// scroll view and surface the template's embedded `RootShow` entry.
-    #[test]
-    fn scrollbar_expansion_pairs_thumb_with_target_view() {
-        let mut scene = scrollbar_host_scene();
-        let entries = expand_widget_standards(&mut scene, &scrollbar_fetcher);
-
-        let thumb = scene
-            .nodes
-            .values()
-            .find(|n| n.raw.get("_ScrollThumbPair_").is_some())
-            .expect("expansion should annotate the template thumb");
-        assert_eq!(
-            thumb.raw.get("_ScrollThumbAxis_").and_then(|v| v.as_str()),
-            Some("x"),
-            "a SizeX-bound thumb scrolls along x"
-        );
-        let pair = thumb.raw.get("_ScrollThumbPair_").cloned();
-        let view = scene
-            .nodes
-            .values()
-            .find(|n| n.name == "Scrollview")
-            .expect("scroll view should survive expansion");
-        assert_eq!(
-            view.raw.get("_ScrollViewPair_").cloned(),
-            pair,
-            "the host's target view must carry the thumb's pair key"
-        );
-        assert!(
-            entries
-                .iter()
-                .any(|e| e.get("name").and_then(|v| v.as_str()) == Some("RootShow")),
-            "the scrollbar template's embedded RootShow entry must be surfaced"
-        );
-    }
-
-    /// The full at-rest visibility chain: `_Show=true` synth param →
-    /// `scrollbar-show` SecondaryStateTag → embedded `RootShow` style →
-    /// `ComponentRoot.IsActive`.
-    #[test]
-    fn scrollbar_show_chain_activates_component_root() {
-        let mut scene = scrollbar_host_scene();
-        let entries = expand_widget_standards(&mut scene, &scrollbar_fetcher);
-        crate::bb_bindings::resolve_state_tags_into_scene(&mut scene, &Default::default());
-        let empty_raw = serde_json::json!({});
-        let brand = bb_brand_style::BrandStyle {
-            identifier: "widget-standard-embedded".to_string(),
-            entries: entries.as_slice(),
-            raw: &empty_raw,
-        };
-        crate::bb_brand_apply::apply_brand_modifiers(&mut scene, &brand, None);
-
-        let root = scene
-            .nodes
-            .values()
-            .find(|n| n.name == "ComponentRoot")
-            .expect("expansion should merge the template root");
-        assert!(
-            root.is_active,
-            "_Show=true must activate the scrollbar root through RootShow"
-        );
-    }
-
-    /// A host TYPE added AFTER today's set (WidgetIcon / general button /
-    /// scrollbar) must NOT steal the primary expansion band from an existing
-    /// host's already-frozen instance IDs. Characterizes the medical close-X
-    /// theft (handoff 130-132 / runbook 395-402): before this fix a new host
-    /// type sorting at a lower node id expanded first and consumed
-    /// 0xF000_0000, shifting every downstream expansion ID. Latent-stability
-    /// only — no production host type reaches the second band today.
-    #[test]
-    fn new_host_type_expansion_does_not_shift_existing_low_band_ids() {
-        // One-node child scene standing in for a merged template instance.
-        let child = |name: &str| {
-            parse_bb_canvas(&serde_json::json!({
-                "_RecordValue_": {
-                    "_Type_": "BuildingBlocks_Canvas",
-                    "size": {"x": 1.0, "y": 1.0},
-                    "scene": [
-                        {"_Pointer_": "ptr:1", "_Type_": "BuildingBlocks_DisplayWidget", "name": name}
-                    ]
-                }
-            }))
-            .expect("child canvas should parse")
-        };
-        let parent = || {
-            parse_bb_canvas(&serde_json::json!({
-                "_RecordValue_": {
-                    "_Type_": "BuildingBlocks_Canvas",
-                    "size": {"x": 100.0, "y": 100.0},
-                    "scene": [
-                        {"_Pointer_": "ptr:1", "_Type_": "BuildingBlocks_DisplayWidget", "name": "root"}
-                    ]
-                }
-            }))
-            .expect("parent canvas should parse")
-        };
-        let merged_id = |scene: &BbScene, name: &str| -> BbNodeId {
-            scene.nodes.values().find(|n| n.name == name).expect("merged node present").id
-        };
-
-        // Baseline: an existing host type expands into the primary band.
-        let mut base = parent();
-        merge_child_scene(&mut base, child("existing"), "", None, Some(EXPANSION_ID_BASE));
-        let existing_solo = merged_id(&base, "existing");
-        assert_eq!(
-            existing_solo, EXPANSION_ID_BASE,
-            "an existing host type's instance takes the primary band base"
-        );
-
-        // Theft scenario: a NEW host type merges FIRST (sorts earlier), then the
-        // existing type. The new type must land in the reserved SECOND band and
-        // leave the existing type's primary-band id untouched.
-        let mut with_new = parent();
-        merge_child_scene(&mut with_new, child("new_type"), "", None, Some(EXPANSION_ID_BASE_SECOND));
-        merge_child_scene(&mut with_new, child("existing"), "", None, Some(EXPANSION_ID_BASE));
-        assert!(
-            merged_id(&with_new, "new_type") >= EXPANSION_ID_BASE_SECOND,
-            "the new host type lands in the reserved second band (0xF800_0000)"
-        );
-        assert_eq!(
-            merged_id(&with_new, "existing"), existing_solo,
-            "existing host type's instance id is invariant to the new type (no theft)"
-        );
-    }
-}
+#[path = "engine_04_tests_expansion.rs"]
+mod tests_expansion;

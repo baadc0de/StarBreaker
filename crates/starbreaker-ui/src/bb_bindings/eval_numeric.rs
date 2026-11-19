@@ -7,7 +7,7 @@
 use crate::bb_scene::BbNodeId;
 use crate::canvas::Value;
 use crate::defaults::DefaultValueRegistry;
-use super::util::parse_points_to_or_ptr_str;
+use super::util::{host_bound_inputs, parse_points_to_or_ptr_str};
 use super::BindingResolver;
 
 impl BindingResolver {
@@ -45,7 +45,10 @@ impl BindingResolver {
         let op = self.ptr_to_op.get(&ptr)?;
         let ty = op.get("_Type_").and_then(|v| v.as_str()).unwrap_or("");
         match ty {
-            "_SynthIntegerParam_" => op.get("resolvedInt").and_then(|v| v.as_i64()),
+            "_SynthIntegerParam_" => host_bound_inputs(op)
+                .into_iter()
+                .find_map(|input| self.eval_integer_ptr(input, defaults, seen))
+                .or_else(|| op.get("resolvedInt").and_then(|v| v.as_i64())),
             "BuildingBlocks_BindingsIntegerComponentParameter" => {
                 if let Some(value) = self.eval_integer_component_parameter_override(op, ptr, defaults, seen) {
                     return Some(value);
@@ -252,7 +255,10 @@ impl BindingResolver {
         let op = self.ptr_to_op.get(&ptr)?;
         let ty = op.get("_Type_").and_then(|v| v.as_str()).unwrap_or("");
         match ty {
-            "_SynthNumberParam_" => op.get("resolvedNumber").and_then(|v| v.as_f64()),
+            "_SynthNumberParam_" => host_bound_inputs(op)
+                .into_iter()
+                .find_map(|input| self.eval_number_ptr(input, defaults, seen))
+                .or_else(|| op.get("resolvedNumber").and_then(|v| v.as_f64())),
             "BuildingBlocks_BindingsNumberComponentParameter" => {
                 if let Some(value) =
                     self.eval_number_component_parameter_override(op, ptr, defaults, seen)

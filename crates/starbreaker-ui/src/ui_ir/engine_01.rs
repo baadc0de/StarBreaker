@@ -2204,6 +2204,10 @@ fn is_placeholder_or_empty_secondary_text_payload(payload: &UiIrTextPayload) -> 
 }
 
 fn node_has_text_intent(node: &BbNode) -> bool {
+    // A button host whose template instance draws its label has no text of its own.
+    if node.raw.get(crate::bb_resolve::LABEL_INSTANCED_KEY).and_then(|v| v.as_bool()) == Some(true) {
+        return false;
+    }
     node.text.is_some()
         || node.raw.get("text").is_some()
         || node.raw.get("locString").is_some()

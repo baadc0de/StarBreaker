@@ -2212,6 +2212,7 @@ fn type_name_str(ty: &BbNodeType) -> &str {
         BbNodeType::WidgetTextField => "WidgetTextField",
         BbNodeType::ComponentGeneralButton => "ComponentGeneralButton",
         BbNodeType::ComponentGeneralButtonSecondary => "ComponentGeneralButtonSecondary",
+        BbNodeType::ComponentGeneralButtonLarge => "ComponentGeneralButtonLarge",
         BbNodeType::WidgetImage => "WidgetImage",
         BbNodeType::WidgetText => "WidgetText",
         BbNodeType::WidgetCustomShape => "WidgetCustomShape",

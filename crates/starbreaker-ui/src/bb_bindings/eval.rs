@@ -1,7 +1,7 @@
 use crate::bb_scene::BbNodeId;
 use crate::canvas::Value;
 use crate::defaults::DefaultValueRegistry;
-use super::util::{parse_points_to_or_ptr_str, value_to_string};
+use super::util::{host_bound_inputs, parse_points_to_or_ptr_str, value_to_string};
 use super::BindingResolver;
 
 impl BindingResolver {
@@ -165,6 +165,16 @@ impl BindingResolver {
                 Some(defaults.lookup_localization(key).unwrap_or(key).to_string())
             }
             "_SynthLocalizedParam_" => {
+                for input in host_bound_inputs(op) {
+                    let mut seen_host = seen.clone();
+                    if let Some(value) = self
+                        .eval_localized_ptr(input, defaults, &mut seen_host)
+                        .or_else(|| self.eval_string_ptr(input, defaults, &mut seen.clone()))
+                        .filter(|value| !value.is_empty())
+                    {
+                        return Some(value);
+                    }
+                }
                 let key = op.get("resolvedLocKey").and_then(|v| v.as_str()).unwrap_or("");
                 if key.is_empty() {
                     return None;
@@ -288,7 +298,10 @@ impl BindingResolver {
         let op = self.ptr_to_op.get(&ptr)?;
         let ty = op.get("_Type_").and_then(|v| v.as_str()).unwrap_or("");
         match ty {
-            "_SynthBooleanParam_" => op.get("resolvedBool").and_then(|v| v.as_bool()),
+            "_SynthBooleanParam_" => host_bound_inputs(op)
+                .into_iter()
+                .find_map(|input| self.eval_bool_ptr(input, defaults, seen))
+                .or_else(|| op.get("resolvedBool").and_then(|v| v.as_bool())),
             "BuildingBlocks_BindingsBooleanComponentParameter" => {
                 if let Some(value) = self.eval_bool_component_parameter_override(op, ptr, defaults, seen) {
                     return Some(value);
@@ -421,6 +434,38 @@ impl BindingResolver {
                     "LessOrEqual" => Some(lhs <= rhs),
                     _ => None,
                 }
+            }
+            "BindingsOperation_BooleanFromLocalizationIsEmpty" => {
+                let inp = op
+                    .get("input")
+                    .and_then(|v| v.as_str())
+                    .and_then(parse_points_to_or_ptr_str)?;
+                let mut seen_loc = std::collections::HashSet::new();
+                match self.eval_localized_ptr(inp, defaults, &mut seen_loc) {
+                    Some(s) => Some(s.trim().is_empty()),
+                    // An unbound localized engine variable is the empty string
+                    // at rest; any other unevaluated input stays unresolved.
+                    None => self.input_is_unbound_variable(inp, defaults).then_some(true),
+                }
+            }
+            "BuildingBlocks_BindingsBooleanFromTagSwitch" => {
+                // `defaultValue`, inverted when the input tag is one of the
+                // `exceptions`; an unbound input is the default.
+                let default = op.get("defaultValue").and_then(|v| v.as_bool()).unwrap_or(false);
+                let mut seen_str = std::collections::HashSet::new();
+                let input = op
+                    .get("input")
+                    .and_then(|v| v.as_str())
+                    .and_then(parse_points_to_or_ptr_str)
+                    .and_then(|p| self.eval_string_ptr(p, defaults, &mut seen_str));
+                let Some(input) = input else {
+                    return Some(default);
+                };
+                let excepted = op
+                    .get("exceptions")
+                    .and_then(|v| v.as_array())
+                    .is_some_and(|tags| tags.iter().any(|tag| super::util::tag_reference_matches(tag, &input)));
+                Some(default != excepted)
             }
             "BindingsOperation_BooleanFromStringIsEmpty" => {
                 let inp = op

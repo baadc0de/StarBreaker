@@ -308,6 +308,8 @@ fn main() -> Result<(), String> {
         transit_location_loc_key: None,
         host_swf_path: None,
         screen_aspect_w_over_h: None,
+        texture_aspect_w_over_h: None,
+        binding_values: &[],
     };
 
     let inputs = PipelineInputs {

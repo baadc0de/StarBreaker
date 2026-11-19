@@ -14,6 +14,38 @@ pub(super) fn case_modifier_from_raw(node_raw: &serde_json::Value) -> &str {
         .unwrap_or("")
 }
 
+/// The host-canvas bindings routed into a synthetic component parameter
+/// (`hostBoundInputs`, set by widget-standard expansion when the host canvas
+/// binds the parameter's `ParamInputN` slot), in authored order. The resolver
+/// evaluates them before the parameter's authored value.
+pub(super) fn host_bound_inputs(op: &serde_json::Value) -> Vec<BbNodeId> {
+    op.get("hostBoundInputs")
+        .and_then(|v| v.as_array())
+        .map(|inputs| {
+            inputs
+                .iter()
+                .filter_map(|v| v.as_str().and_then(parse_points_to_or_ptr_str))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Whether a tag record reference (`{_RecordName_: "Tag.<guid>", _RecordId_}`
+/// or a bare string) names the tag `value` — an engine tag value as a GUID or
+/// as the `Tag.<guid>` record name, compared case-insensitively.
+pub(super) fn tag_reference_matches(tag: &serde_json::Value, value: &str) -> bool {
+    let bare = |s: &str| s.trim().trim_start_matches("Tag.").to_ascii_lowercase();
+    let value = bare(value);
+    if value.is_empty() {
+        return false;
+    }
+    [tag.get("_RecordId_"), tag.get("_RecordName_"), Some(tag)]
+        .into_iter()
+        .flatten()
+        .filter_map(|v| v.as_str())
+        .any(|s| bare(s) == value)
+}
+
 #[allow(dead_code)]
 pub(super) fn derive_label_from_name(name: &str) -> String {
     let trimmed = name.trim();

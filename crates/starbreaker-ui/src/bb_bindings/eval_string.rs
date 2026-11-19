@@ -1,7 +1,7 @@
 use crate::bb_scene::BbNodeId;
 use crate::defaults::DefaultValueRegistry;
 
-use super::util::{parse_points_to_or_ptr_str, value_to_string};
+use super::util::{host_bound_inputs, parse_points_to_or_ptr_str, value_to_string};
 use super::BindingResolver;
 
 impl BindingResolver {
@@ -37,10 +37,10 @@ impl BindingResolver {
                     .and_then(|v| v.as_str())
                     .map(str::to_owned)
             }
-            "_SynthStringParam_" => op
-                .get("resolvedString")
-                .and_then(|v| v.as_str())
-                .map(str::to_owned),
+            "_SynthStringParam_" => host_bound_inputs(op)
+                .into_iter()
+                .find_map(|input| self.eval_string_ptr(input, defaults, seen).filter(|s| !s.is_empty()))
+                .or_else(|| op.get("resolvedString").and_then(|v| v.as_str()).map(str::to_owned)),
             "BuildingBlocks_BindingsStringVariable" => {
                 let path = self.ptr_to_path.get(&ptr)?;
                 let val = defaults.lookup_path(path)?;
@@ -98,6 +98,25 @@ impl BindingResolver {
                     );
                 }
                 out
+            }
+            "BuildingBlocks_BindingsTagFromTagSwitch" => {
+                // The input tag mapped through the `values` (first → second)
+                // pairs, else `defaultValue` (null: no tag). An unbound input is
+                // the default.
+                let input = op
+                    .get("input")
+                    .and_then(|v| v.as_str())
+                    .and_then(parse_points_to_or_ptr_str)
+                    .and_then(|p| self.eval_string_ptr(p, defaults, seen));
+                let mapped = input.as_deref().and_then(|input| {
+                    op.get("values")?.as_array()?.iter().find_map(|pair| {
+                        pair.get("first")
+                            .is_some_and(|first| super::util::tag_reference_matches(first, input))
+                            .then(|| pair.get("second").and_then(tag_reference_to_string))
+                            .flatten()
+                    })
+                });
+                mapped.or_else(|| op.get("defaultValue").and_then(tag_reference_to_string))
             }
             "BuildingBlocks_BindingsTagFromBoolean" => {
                 let mut seen_bool = std::collections::HashSet::new();

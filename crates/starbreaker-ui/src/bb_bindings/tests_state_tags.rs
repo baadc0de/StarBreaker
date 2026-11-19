@@ -482,3 +482,66 @@ use crate::defaults::DefaultValueRegistry;
             "a bound engine value overrides the authored static"
         );
     }
+
+    /// I1-5 root cause 3: `BindingsBooleanFromTagSwitch` is `defaultValue`, inverted when the input tag is one of its
+    /// `exceptions` (the transit console's `Button_Call.Disabled` / `StyleColor_BG_Overlay.IsActive` from
+    /// `StateType.EnableState.TagGUID`). An unbound input is the default: the overlay stays off at rest. Synthetic ids.
+    #[test]
+    fn boolean_from_tag_switch_is_default_unless_the_input_tag_is_an_exception() {
+        let ops = [
+            json!({"_Type_": "BuildingBlocks_BindingsBooleanField", "widget": "ptr:5", "field": "IsActive", "input": "ptr:24"}),
+            json!({"_Pointer_": "ptr:24", "_Type_": "BuildingBlocks_BindingsBooleanFromTagSwitch", "defaultValue": false,
+                   "exceptions": [{"_RecordName_": "Tag.00000000-0000-0000-0000-0000000000e1",
+                                   "_RecordId_": "00000000-0000-0000-0000-0000000000e1"}],
+                   "input": "ptr:28"}),
+            json!({"_Pointer_": "ptr:28", "_Type_": "BuildingBlocks_BindingsStringVariable", "binding": "test.enable.tag"}),
+        ];
+        let resolver = BindingResolver::from_operations(&ops);
+        let mut defaults = DefaultValueRegistry::default();
+        assert_eq!(resolver.resolve_field_bool(5, "IsActive", &defaults), Some(false), "unbound input: the default");
+        defaults.insert_path("test.enable.tag", Value::Str("00000000-0000-0000-0000-0000000000E1".into()));
+        assert_eq!(resolver.resolve_field_bool(5, "IsActive", &defaults), Some(true), "an exception inverts it");
+        defaults.insert_path("test.enable.tag", Value::Str("00000000-0000-0000-0000-0000000000e2".into()));
+        assert_eq!(resolver.resolve_field_bool(5, "IsActive", &defaults), Some(false), "any other tag: the default");
+    }
+
+    /// `BindingsTagFromTagSwitch` maps the input tag through its `values` pairs, else `defaultValue` (null: no tag).
+    #[test]
+    fn tag_from_tag_switch_maps_the_input_tag() {
+        let ops = [
+            json!({"_Type_": "BuildingBlocks_BindingsStringField", "widget": "ptr:9", "field": "PrimaryStateTag", "input": "ptr:25"}),
+            json!({"_Pointer_": "ptr:25", "_Type_": "BuildingBlocks_BindingsTagFromTagSwitch", "defaultValue": null,
+                   "values": [{"_Type_": "BuildingBlocks_TagTagPair",
+                               "first": {"_RecordName_": "Tag.00000000-0000-0000-0000-0000000000e1", "_RecordId_": "00000000-0000-0000-0000-0000000000e1"},
+                               "second": {"_RecordName_": "Tag.00000000-0000-0000-0000-0000000000f1", "_RecordId_": "00000000-0000-0000-0000-0000000000f1"}}],
+                   "input": "ptr:28"}),
+            json!({"_Pointer_": "ptr:28", "_Type_": "BuildingBlocks_BindingsStringVariable", "binding": "test.enable.tag"}),
+        ];
+        let resolver = BindingResolver::from_operations(&ops);
+        let mut defaults = DefaultValueRegistry::default();
+        assert_eq!(resolver.resolve_field_text(9, "PrimaryStateTag", &defaults), None, "unbound: the null default");
+        defaults.insert_path("test.enable.tag", Value::Str("00000000-0000-0000-0000-0000000000e1".into()));
+        assert_eq!(
+            resolver.resolve_field_text(9, "PrimaryStateTag", &defaults).as_deref(),
+            Some("Tag.00000000-0000-0000-0000-0000000000f1")
+        );
+    }
+
+    /// `BindingsOperation_BooleanFromLocalizationIsEmpty`: whether the localized input is empty. An unbound localized
+    /// engine variable is the empty string at rest (the door header's room name, the transit console's floor names).
+    #[test]
+    fn boolean_from_localization_is_empty_reads_the_localized_input() {
+        let ops = [
+            json!({"_Type_": "BuildingBlocks_BindingsBooleanField", "widget": "ptr:7", "field": "IsActive", "input": "ptr:13"}),
+            json!({"_Pointer_": "ptr:13", "_Type_": "BuildingBlocks_BindingsBooleanInvert", "input": "ptr:14"}),
+            json!({"_Pointer_": "ptr:14", "_Type_": "BindingsOperation_BooleanFromLocalizationIsEmpty", "input": "ptr:8"}),
+            json!({"_Pointer_": "ptr:8", "_Type_": "BuildingBlocks_BindingsLocalizedVariable", "binding": "test.location.name"}),
+        ];
+        let resolver = BindingResolver::from_operations(&ops);
+        let mut defaults = DefaultValueRegistry::default();
+        assert_eq!(resolver.resolve_field_bool(7, "IsActive", &defaults), Some(false), "unbound: empty, so hidden");
+        defaults.insert_path("test.location.name", Value::Str("somewhere".into()));
+        assert_eq!(resolver.resolve_field_bool(7, "IsActive", &defaults), Some(true));
+        defaults.insert_path("test.location.name", Value::Str(String::new()));
+        assert_eq!(resolver.resolve_field_bool(7, "IsActive", &defaults), Some(false));
+    }

@@ -120,6 +120,8 @@ fn compile_ir_for_representative_fixtures_validates() {
             transit_location_loc_key: None,
         host_swf_path: None,
         screen_aspect_w_over_h: None,
+        texture_aspect_w_over_h: None,
+        binding_values: &[],
         };
 
         let inputs = PipelineInputs {
@@ -166,6 +168,8 @@ fn stable_hash_is_repeatable_for_representative_fixture() {
         transit_location_loc_key: None,
         host_swf_path: None,
         screen_aspect_w_over_h: None,
+        texture_aspect_w_over_h: None,
+        binding_values: &[],
     };
 
     let inputs = PipelineInputs {

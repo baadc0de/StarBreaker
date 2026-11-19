@@ -2067,6 +2067,7 @@ pub(crate) fn node_type_name(node_type: &BbNodeType) -> &str {
         BbNodeType::WidgetTextField => "widget_text_field",
         BbNodeType::ComponentGeneralButton => "component_general_button",
         BbNodeType::ComponentGeneralButtonSecondary => "component_general_button_secondary",
+        BbNodeType::ComponentGeneralButtonLarge => "component_general_button_large",
         BbNodeType::WidgetImage => "widget_image",
         BbNodeType::WidgetText => "widget_text",
         BbNodeType::WidgetCustomShape => "widget_custom_shape",
