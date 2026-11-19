@@ -2,11 +2,13 @@
 
 use rusttype::Font;
 
+mod label_mask;
 mod swf_draw;
 mod ttf_draw;
 #[cfg(test)]
 mod tests;
 
+pub use label_mask::{LabelMask, render_label_mask};
 pub use ttf_draw::TextRenderer;
 
 use std::cell::RefCell;

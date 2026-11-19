@@ -8,6 +8,18 @@ use swf::Tag;
 
 use super::super::SwfFetcher;
 
+/// The engine's shared font library: every canvas host merges it (the fonts its text fields name by export symbol).
+const SHARED_FONTS_SWF: &str = "Data/UI/fonts/Shared/fonts_en.gfx";
+
+/// The shared font library alone, for a host that draws text in the game's UI fonts outside a canvas (a viewer's own
+/// panel labels). `None` when the archive has no such library or it does not parse.
+pub fn load_shared_fonts(fetcher: &dyn SwfFetcher) -> Option<SwfAssetLibrary> {
+    let bytes = fetcher.fetch_swf_bytes(SHARED_FONTS_SWF).ok()?;
+    SwfAssetLibrary::new(bytes)
+        .map_err(|e| log::warn!("pipeline: failed to parse shared fonts SWF '{SHARED_FONTS_SWF}': {e}"))
+        .ok()
+}
+
 pub(crate) fn load_first_swf(paths: &[String], fetcher: &dyn SwfFetcher) -> SwfAssetLibrary {
     fn merge_support_swf_assets(
         root_lib: &mut SwfAssetLibrary,
@@ -26,7 +38,7 @@ pub(crate) fn load_first_swf(paths: &[String], fetcher: &dyn SwfFetcher) -> SwfA
             pending.push((canvas_path, canvas_bytes));
         }
 
-        let shared_fonts_path = "Data/UI/fonts/Shared/fonts_en.gfx".to_string();
+        let shared_fonts_path = SHARED_FONTS_SWF.to_string();
         if let Ok(shared_bytes) = fetcher.fetch_swf_bytes(&shared_fonts_path) {
             if let Err(e) = root_lib.merge_swf_bytes(&shared_bytes) {
                 log::debug!(

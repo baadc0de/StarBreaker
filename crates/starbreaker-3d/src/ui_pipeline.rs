@@ -315,6 +315,17 @@ fn collect_state_paths(value: &serde_json::Value, paths: &mut std::collections::
     }
 }
 
+/// The brand palette a manufacturer's canvases render with: the matched `BuildingBlocks_Style` record's name and its
+/// `colorStyles` by `BB_ColorStyle` index (an unauthored slot is `None`).
+pub(crate) fn manufacturer_colour_styles(db: &Database<'_>, manufacturer_id: &str) -> Option<(String, Vec<Option<[u8; 4]>>)> {
+    ManufacturerStyleFetcher { db }.colour_styles(manufacturer_id)
+}
+
+/// The engine's shared UI font library (the fonts canvases name by export symbol), read from the archive.
+pub(crate) fn shared_ui_fonts(p4k: &MappedP4k) -> Option<starbreaker_ui::swf_assets::SwfAssetLibrary> {
+    starbreaker_ui::pipeline::load_shared_fonts(&P4kSwfFetcher { p4k })
+}
+
 /// The manufacturer id the export gives a root entity's UI bindings (`decomposed.rs` `derive_manufacturer_id`), for a
 /// replay (`starbreaker ui render`) to render with the export's brand: `None` for a root without a manufacturer code
 /// (a hangar), whose panels render without a brand.

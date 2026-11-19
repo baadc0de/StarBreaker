@@ -41,11 +41,10 @@ fn manufacturer_style_match_score(stem_lower: &str, manufacturer_lower: &str) ->
     None
 }
 
-impl<'a> StyleFetcher for ManufacturerStyleFetcher<'a> {
-    fn fetch_manufacturer_style(&self, manufacturer_id: &str) -> Result<ManufacturerStyle, UiError> {
-        let loader = StyleLoader::for_manufacturer(manufacturer_id);
+impl<'a> ManufacturerStyleFetcher<'a> {
+    /// The `BuildingBlocks_Style` record a manufacturer's canvases render with, best match first (see the type doc).
+    fn style_record(&self, manufacturer_id: &str) -> Option<(String, &'a starbreaker_datacore::types::Record)> {
         let needle = manufacturer_id.to_ascii_lowercase();
-
         let mut candidates: Vec<_> = self
             .db
             .records_by_type_name("BuildingBlocks_Style")
@@ -56,10 +55,34 @@ impl<'a> StyleFetcher for ManufacturerStyleFetcher<'a> {
                 Some((bucket, stem, full, record))
             })
             .collect();
-
         candidates.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+        candidates.into_iter().next().map(|(_, _, full, record)| (full, record))
+    }
 
-        if let Some((_, _, full_name, record)) = candidates.first() {
+    /// The style record's `colorStyles` by `BB_ColorStyle` index (an unauthored slot is `None`), and the record's name:
+    /// the brand palette the manufacturer's canvases render with.
+    pub(super) fn colour_styles(&self, manufacturer_id: &str) -> Option<(String, Vec<Option<[u8; 4]>>)> {
+        let (full_name, record) = self.style_record(manufacturer_id)?;
+        let bytes = starbreaker_datacore::export::to_json_compact(self.db, record).ok()?;
+        let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+        let slots = value.get("_RecordValue_").unwrap_or(&value).get("colorStyles")?.as_array()?;
+        let channel = |c: &serde_json::Value, k: &str| c.get(k).and_then(|v| v.as_u64()).and_then(|v| u8::try_from(v).ok());
+        let colours = slots
+            .iter()
+            .map(|slot| {
+                let c = slot.get("color")?;
+                Some([channel(c, "r")?, channel(c, "g")?, channel(c, "b")?, channel(c, "a")?])
+            })
+            .collect();
+        Some((full_name, colours))
+    }
+}
+
+impl<'a> StyleFetcher for ManufacturerStyleFetcher<'a> {
+    fn fetch_manufacturer_style(&self, manufacturer_id: &str) -> Result<ManufacturerStyle, UiError> {
+        let loader = StyleLoader::for_manufacturer(manufacturer_id);
+
+        if let Some((full_name, record)) = self.style_record(manufacturer_id) {
             match starbreaker_datacore::export::to_json_compact(self.db, record) {
                 Ok(bytes) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
                     Ok(value) => match loader.parse_buildingblocks_style_record(&value) {

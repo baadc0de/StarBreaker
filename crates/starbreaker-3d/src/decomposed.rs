@@ -1764,6 +1764,18 @@ pub(crate) fn write_decomposed_export(
         normalized_material_path: Option<String>,
         cache_key: String,
     }
+    // WP-P5 floor panel: each lift's panel style and label masks (`lifts[].panel_style`).
+    let lift_styles = lift_panel_styles(
+        &input,
+        db,
+        p4k,
+        opts.texture_mip,
+        root_manufacturer_id.as_deref(),
+        ui_loc_data.as_ref(),
+        &ui_ship_data,
+        &mut files,
+    );
+
     let precomputed_cgfs: Vec<PrecomputedCgf> = input
         .interiors
         .unique_cgfs
@@ -2091,7 +2103,18 @@ pub(crate) fn write_decomposed_export(
             proximity_sensors: container.proximity_sensors.iter().map(|sensor| sensor.to_json()).collect(),
             inventory_containers: container.inventory_containers.iter().map(|c| c.to_json()).collect(),
             entities: container.entities.iter().map(|e| e.to_json()).collect(),
-            lifts: container.lifts.iter().map(|l| l.to_json()).collect(),
+            lifts: container
+                .lifts
+                .iter()
+                .enumerate()
+                .map(|(lift_index, lift)| {
+                    let mut value = lift.to_json();
+                    if let Some(style) = lift_styles.get(&(index, lift_index)) {
+                        value["panel_style"] = style.clone();
+                    }
+                    value
+                })
+                .collect(),
         });
 
         if container_count > 0 && total_interior_placements == 0 {
@@ -3661,6 +3684,83 @@ fn generate_ui_binding_records_detached(
         ui_bindings.push(binding);
     }
     (ui_bindings, file_records)
+}
+
+/// WP-P5 floor panel: `lifts[].panel_style` by (container, lift), with its label masks written into `files`. The style
+/// is the door pads': the first door pad of the lift's own container, else of any container (see `lift_panel_style`).
+/// Empty without lifts, UI localization, a door pad, the pads' label font or a named stop (each case logged).
+#[allow(clippy::too_many_arguments)]
+fn lift_panel_styles(
+    input: &DecomposedInput,
+    db: &Database<'_>,
+    p4k: &MappedP4k,
+    texture_mip: u32,
+    root_manufacturer_id: Option<&str>,
+    loc_data: Option<&crate::ui_pipeline::UiLocData>,
+    ship_data: &crate::ui_pipeline::UiShipData,
+    files: &mut OutputFiles,
+) -> HashMap<(usize, usize), serde_json::Value> {
+    use crate::lift_panel_style as style;
+    let mut out = HashMap::new();
+    let containers = &input.interiors.containers;
+    if containers.iter().all(|c| c.lifts.is_empty()) {
+        return out;
+    }
+    let Some(loc_data) = loc_data else {
+        log::warn!("lift panel style: no UI bindings in this export (no door pad to take the style from)");
+        return out;
+    };
+    fn door_pad(
+        container: &crate::pipeline::InteriorContainerData,
+    ) -> Option<(&crate::types::InteriorPlacement, &UiBinding)> {
+        container
+            .placements
+            .iter()
+            .find_map(|p| p.ui_bindings.iter().find(|b| crate::lift_panel_style::is_door_pad(b)).map(|b| (p, b)))
+    }
+    let Some(fonts) = crate::ui_pipeline::shared_ui_fonts(p4k) else {
+        log::warn!("lift panel style: the shared UI font library did not load");
+        return out;
+    };
+    let palette = root_manufacturer_id.and_then(|id| crate::ui_pipeline::manufacturer_colour_styles(db, id));
+    let mut labels: HashMap<*const UiBinding, Option<style::LabelStyle>> = HashMap::new();
+    for (container_index, container) in containers.iter().enumerate() {
+        for (lift_index, lift) in container.lifts.iter().enumerate() {
+            let names = style::stop_display_names(lift, &container.placements);
+            let Some((pad, binding)) = door_pad(container).or_else(|| containers.iter().find_map(door_pad)) else {
+                log::warn!("lift {}: no door pad in this export to take the panel style from", lift.entity_id);
+                continue;
+            };
+            let label = labels.entry(binding as *const UiBinding).or_insert_with(|| {
+                crate::ui_pipeline::compile_ui_binding_ir_json(binding, None, db, p4k, texture_mip, root_manufacturer_id, loc_data, ship_data)
+                    .map_err(|e| log::warn!("lift {}: door pad IR failed: {e}", lift.entity_id))
+                    .ok()
+                    .and_then(|ir| serde_json::from_str::<serde_json::Value>(&ir).ok())
+                    .and_then(|ir| style::label_style_from_ir(&ir))
+            });
+            let Some(label) = label.as_ref() else {
+                log::warn!("lift {}: the door pad's canvas has no large-button label", lift.entity_id);
+                continue;
+            };
+            let source = style::StyleSource { entity_id: pad.identity.entity_id.as_deref(), binding, palette: palette.clone() };
+            let path_for = |stem: &str| {
+                generated_ui_binding_path_for_stem(&input.entity_name, &input.geometry_path, root_manufacturer_id, &sanitize_identifier(stem))
+            };
+            let Some((mut value, masks)) = style::build(lift, &names, label, &source, &fonts, path_for) else {
+                continue;
+            };
+            for (path, png) in masks {
+                let written = insert_binary_file(files, path.clone(), png);
+                for entry in value["labels"].as_array_mut().into_iter().flatten() {
+                    if entry["image"] == path.as_str() {
+                        entry["image"] = serde_json::json!(written);
+                    }
+                }
+            }
+            out.insert((container_index, lift_index), value);
+        }
+    }
+    out
 }
 
 /// The default path of `binding`'s render (the export assigns stems through `UiRenders::stem`).

@@ -37,7 +37,7 @@ use swf_selection::{build_swf_selection_manifest, load_first_swf};
 use timing::timed;
 
 pub use crate::bb_atlas::AssetFetcher;
-pub use swf_selection::flash_swf_candidates;
+pub use swf_selection::{flash_swf_candidates, load_shared_fonts};
 
 /// Static UI captures use midpoint sampling for authored animations.
 pub const DEFAULT_STATIC_ANIMATION_SAMPLE_PERCENT: f32 = 50.0;

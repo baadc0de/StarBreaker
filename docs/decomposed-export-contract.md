@@ -289,7 +289,29 @@ lift carriage):
   component that no node links to. A branched, cyclic or disconnected graph
   is logged and that lift is not exported;
 - `riders[]`: the entity ids whose `parent_attachment` chain reaches the
-  carriage (sorted).
+  carriage (sorted);
+- `panel_style` (cache format 35; omitted when the export has no door pad,
+  its canvas has no large-button label, the label font is not in the shared
+  font library, or no panel names a stop): what a consumer drawing its own
+  floor-select list takes from data, in the look of the vehicle's door pads.
+  The game draws no UI on such a panel (the C2's inner floor panel has a
+  screen face and no canvas); the layout is the consumer's.
+  - `source`: `{entity_id, canvas, style_record}`: the door pad the style was
+    read from (the first `ui_bindings[]` entry whose `state_types` include
+    `DoorOpenState`, in the lift's own container first), its canvas, and the
+    `BuildingBlocks_Style` record its canvas renders with;
+  - `palette[]`: `{role, srgba}`, that style's `colorStyles` by
+    `BB_ColorStyle` role (unauthored slots left out);
+  - `label`: the pad canvas's large-button label (its compiled IR): `{font_style,
+    font_symbol, font_size, letter_spacing, upper_case, colour_token}` (size and
+    spacing in the canvas's target pixels; `upper_case`: the label renders in
+    capitals);
+  - `labels[]`: `{stop, text, image, width, height, em_px}`: one per stop a
+    placed panel names, `text` the display name of the panel interaction whose
+    link asks the carriage for that stop (`From Elevator call <stop>`), cased
+    as the pad's label; `image` a white glyph mask (alpha = coverage) of the
+    text in the label's font at `em_px` (the pad's letter spacing scaled to that
+    em), centred with a quarter-em margin.
 
 A root container `ItemPort` that a `.soc` entity names in its
 `TileAttachmentParams@ItemPortName` is that entity: once the entity is

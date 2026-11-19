@@ -45,6 +45,14 @@ pub(crate) fn bb_colour_style_enum_index(token: &str) -> Option<usize> {
     })
 }
 
+/// The `BB_ColorStyle` role names in enum order (index = palette slot), for hosts that export a brand palette by
+/// role. Spelled as the dumped enum spells them.
+pub const BB_COLOUR_STYLE_ROLES: [&str; 17] = [
+    "Base", "Positive", "Moderate", "Critical", "Accent1", "Accent2", "Bright", "Selected", "Disabled", "Background",
+    "ContactNeutral", "ContactParty", "ContactPositiveRep", "ContactNegativeRep", "ContactAgressive", "ContactUnknown",
+    "MissionObjectives",
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -60,6 +68,13 @@ mod tests {
         assert_eq!(bb_colour_style_enum_index("Disabled"), Some(8));
         assert_eq!(bb_colour_style_enum_index("ContactUnknown"), Some(15));
         assert_eq!(bb_colour_style_enum_index("MissionObjectives"), Some(16));
+    }
+
+    #[test]
+    fn role_names_are_the_enum_in_order() {
+        for (index, name) in BB_COLOUR_STYLE_ROLES.iter().enumerate() {
+            assert_eq!(bb_colour_style_enum_index(name), Some(index), "{name}");
+        }
     }
 
     #[test]

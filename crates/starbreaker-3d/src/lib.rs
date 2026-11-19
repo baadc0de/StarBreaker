@@ -7,6 +7,7 @@ pub(crate) mod physics_grid;
 pub mod error;
 mod export_stamp;
 pub(crate) mod gltf;
+pub(crate) mod lift_panel_style;
 pub(crate) mod included_objects;
 pub mod ivo;
 pub mod clip;
