@@ -100,6 +100,101 @@ mod materialised_entry_tests {
         assert!((rect.y - 30.0).abs() < 0.5, "expected item centred at y=30, got {}", rect.y);
     }
 
+    /// WP-I1 fix pass: a START cross-justified column item with no authored cross
+    /// anchor sits at the column's start edge; its pivot (0.5) does not push it
+    /// half its width out of the column. The light panel's full-width row frame
+    /// (anchor 0, pivot 0.5 in a ColumnReverse Start/Start column) hung half off
+    /// the left edge. Synthetic sizes.
+    #[test]
+    fn flex_column_start_cross_axis_keeps_unanchored_pivoted_item_in_column() {
+        let fixed = |v: f32| serde_json::json!({"value": v, "behavior": "Fixed"});
+        let pct = serde_json::json!({"value": 1.0, "behavior": "Percent"});
+        let scene = vec![
+            serde_json::json!({"_Pointer_": "ptr:1", "_Type_": "BuildingBlocks_DisplayWidget",
+                "name": "column", "isActive": true, "position": {"x": 10.0, "y": 0.0, "z": 0.0},
+                "sizing": {"width": fixed(80.0), "height": fixed(100.0)},
+                "layoutPolicy": {"_Type_": "BuildingBlocks_FlexContainer", "direction": "ColumnReverse",
+                    "axisJustification": "Start", "crossAxisJustification": "Start", "itemAlignment": "Start"}}),
+            serde_json::json!({"_Pointer_": "ptr:2", "_Type_": "BuildingBlocks_DisplayWidget",
+                "name": "frame", "parent": "_PointsTo_:ptr:1", "isActive": true,
+                "pivot": {"x": 0.5, "y": 0.5, "z": 0.0}, "sizing": {"width": pct, "height": fixed(40.0)}}),
+        ];
+        let canvas = serde_json::json!({"_RecordValue_": {"_Type_": "BuildingBlocks_Canvas",
+            "size": {"x": 100.0, "y": 100.0}, "coordinateMethod": "useRaw", "operations": [], "scene": scene}});
+        let result = layout(&parse_bb_canvas(&canvas).expect("fixture parses"), 100, 100);
+        let (column, frame) = (result.rects[&1], result.rects[&2]);
+        assert!((frame.x - column.x).abs() < 0.5, "frame starts at the column's edge {}, got {frame:?}", column.x);
+        assert!((frame.w - column.w).abs() < 0.5, "full width, got {frame:?}");
+    }
+
+    /// WP-I1 fix pass: non-grow items flow BESIDE a growing sibling, which takes
+    /// what they leave. The door pad's column is header (Auto, content 30 high),
+    /// DoorButton (grow 1) and button shelf (Auto, content 20 high); the header and
+    /// shelf were overlaid on the whole column and the button filled it. Synthetic
+    /// sizes.
+    #[test]
+    fn flex_column_non_grow_items_flow_around_a_growing_item() {
+        let fixed = |v: f32| serde_json::json!({"value": v, "behavior": "Fixed"});
+        let pct = |v: f32| serde_json::json!({"value": v, "behavior": "Percent"});
+        let auto = serde_json::json!({"value": 1.0, "behavior": "Auto"});
+        let scene = vec![
+            serde_json::json!({"_Pointer_": "ptr:1", "_Type_": "BuildingBlocks_DisplayWidget",
+                "name": "column", "isActive": true, "sizing": {"width": fixed(100.0), "height": fixed(200.0)},
+                "layoutPolicy": {"_Type_": "BuildingBlocks_FlexContainer", "direction": "Column",
+                    "axisJustification": "Center", "crossAxisJustification": "Stretch", "rowSpacing": 10.0}}),
+            serde_json::json!({"_Pointer_": "ptr:2", "_Type_": "BuildingBlocks_DisplayWidget",
+                "name": "header", "parent": "_PointsTo_:ptr:1", "isActive": true,
+                "sizing": {"width": pct(1.0), "height": auto}}),
+            serde_json::json!({"_Pointer_": "ptr:3", "_Type_": "BuildingBlocks_DisplayWidget",
+                "name": "header_row", "parent": "_PointsTo_:ptr:2", "isActive": true,
+                "sizing": {"width": pct(1.0), "height": fixed(30.0)}}),
+            serde_json::json!({"_Pointer_": "ptr:4", "_Type_": "BuildingBlocks_DisplayWidget",
+                "name": "button", "parent": "_PointsTo_:ptr:1", "isActive": true,
+                "layoutPolicyItem": {"_Type_": "BuildingBlocks_FlexItem", "growProportion": 1.0, "shrinkProportion": 1.0},
+                "sizing": {"width": pct(1.0), "height": pct(0.75)}}),
+            serde_json::json!({"_Pointer_": "ptr:5", "_Type_": "BuildingBlocks_DisplayWidget",
+                "name": "shelf", "parent": "_PointsTo_:ptr:1", "isActive": true,
+                "sizing": {"width": pct(1.0), "height": auto}}),
+            serde_json::json!({"_Pointer_": "ptr:6", "_Type_": "BuildingBlocks_DisplayWidget",
+                "name": "shelf_row", "parent": "_PointsTo_:ptr:5", "isActive": true,
+                "sizing": {"width": pct(1.0), "height": fixed(20.0)}}),
+        ];
+        let canvas = serde_json::json!({"_RecordValue_": {"_Type_": "BuildingBlocks_Canvas",
+            "size": {"x": 100.0, "y": 200.0}, "coordinateMethod": "useRaw", "operations": [], "scene": scene}});
+        let result = layout(&parse_bb_canvas(&canvas).expect("fixture parses"), 100, 200);
+        let (header, button, shelf) = (result.rects[&2], result.rects[&4], result.rects[&5]);
+        assert!((header.y - 0.0).abs() < 0.5 && (header.h - 30.0).abs() < 0.5, "header on top, content high: {header:?}");
+        assert!((button.y - 40.0).abs() < 0.5, "button below the header and spacing: {button:?}");
+        // 200 - 30 - 20 - 2 x 10 spacing = 130 for the growing button.
+        assert!((button.h - 130.0).abs() < 0.5, "button takes what the others leave: {button:?}");
+        assert!((shelf.y - 180.0).abs() < 0.5 && (shelf.h - 20.0).abs() < 0.5, "shelf at the bottom: {shelf:?}");
+    }
+
+    /// WP-I1 fix pass: a wrapping row with main-axis `Stretch` shares its free
+    /// space among its items — the door pad's button shelf (20% buttons, 20 px
+    /// spacing): two buttons split the bar, one spans it. They sat at the left at
+    /// their authored 20% before. Synthetic sizes.
+    #[test]
+    fn flex_wrap_row_stretch_shares_the_free_space() {
+        let pct = |v: f32| serde_json::json!({"value": v, "behavior": "Percent"});
+        let button = |ptr: u32| serde_json::json!({"_Pointer_": format!("ptr:{ptr}"), "_Type_": "BuildingBlocks_DisplayWidget",
+            "name": "button", "parent": "_PointsTo_:ptr:1", "isActive": true, "sizing": {"width": pct(0.2), "height": pct(1.0)}});
+        let shelf = |buttons: &[u32]| {
+            let mut scene = vec![serde_json::json!({"_Pointer_": "ptr:1", "_Type_": "BuildingBlocks_DisplayWidget",
+                "name": "shelf", "isActive": true, "sizing": {"width": pct(1.0), "height": pct(1.0)},
+                "layoutPolicy": {"_Type_": "BuildingBlocks_FlexContainer", "direction": "Row", "wrap": "Wrap",
+                    "axisJustification": "Stretch", "crossAxisJustification": "Center", "columnSpacing": 20.0}})];
+            scene.extend(buttons.iter().map(|p| button(*p)));
+            let canvas = serde_json::json!({"_RecordValue_": {"_Type_": "BuildingBlocks_Canvas",
+                "size": {"x": 200.0, "y": 50.0}, "coordinateMethod": "useRaw", "operations": [], "scene": scene}});
+            layout(&parse_bb_canvas(&canvas).expect("fixture parses"), 200, 50)
+        };
+        let two = shelf(&[2, 3]);
+        assert!((two.rects[&2].w - 90.0).abs() < 0.5 && (two.rects[&3].x - 110.0).abs() < 0.5, "two split the bar: {:?} {:?}", two.rects[&2], two.rects[&3]);
+        let one = shelf(&[2]);
+        assert!((one.rects[&2].w - 200.0).abs() < 0.5, "one spans it: {:?}", one.rects[&2]);
+    }
+
     /// The companion to the ✕ fix: a Center cross-justified column item that
     /// DOES author a cross-axis anchor keeps its overlay `anchor.x*W - pivot.x*w`
     /// offset. A self-consistent anchor==pivot==0.5 (the countermeasure firing

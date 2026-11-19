@@ -623,3 +623,24 @@ fn alignment_enumerations_set_the_text_alignment() {
     assert_eq!(node.raw.get("verticalTextAlignment").and_then(|v| v.as_str()), Some("Center"));
     assert_eq!(node.text.as_ref().map(|t| t.alignment.as_str()), Some("Center"));
 }
+
+    /// WP-I1 fix pass: a field binding that resolved a node's visibility wins over a style's `IsActive` (the engine sets
+    /// bound fields over the stylesheet). The door pad's large button hides its label while locked
+    /// (`ShowLabel` <- `!doorlocked`), but the modular kit's `RootTextFieldElementInstance` (IsActive true), re-applied
+    /// after the bindings, showed LOCKED beside the lock icon. Synthetic entry.
+    #[test]
+    fn bound_visibility_wins_over_a_style_is_active() {
+        let mut scene = make_test_scene();
+        {
+            let node = scene.nodes.get_mut(&1).unwrap();
+            node.is_active = false;
+            node.raw.as_object_mut().unwrap().insert(BOUND_IS_ACTIVE_KEY.to_string(), json!(false));
+        }
+        let brand = BrandStyle {
+            identifier: "test_brand".to_string(),
+            entries: &[json!({"modifiers": [{"_Type_": "BuildingBlocks_FieldModifierBoolean", "field": "IsActive", "value": true}]})],
+            raw: &json!({}),
+        };
+        apply_brand_modifiers(&mut scene, &brand, None);
+        assert!(!scene.nodes[&1].is_active, "the bound visibility stands");
+    }

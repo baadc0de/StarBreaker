@@ -2213,6 +2213,11 @@ pub(crate) fn finalize_widget_standard_fields(
             && let Some(node) = scene.nodes.get_mut(&node_id)
         {
             node.is_active = is_active;
+            // The bound visibility stands against later style passes (the
+            // modular-kit sheets re-applied by the pipeline).
+            if let Some(raw) = node.raw.as_object_mut() {
+                raw.insert(crate::bb_brand_apply::BOUND_IS_ACTIVE_KEY.to_string(), serde_json::json!(is_active));
+            }
         }
     }
 

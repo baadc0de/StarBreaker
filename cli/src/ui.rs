@@ -107,23 +107,13 @@ fn run_render(
         return Ok(());
     }
 
-    // Derive manufacturer_id from the scene's root_entity.entity_name, e.g.
-    // "EntityClassDefinition.RSI_Aurora_Mk2" → "RSI_Aurora_Mk2" → prefix "RSI" → "rsi".
+    // The export's manufacturer for the scene's root entity (`EntityClassDefinition.RSI_Aurora_Mk2` -> `rsi`; a root
+    // without a manufacturer code, such as a hangar, has none and renders without a brand), so a replay matches it.
     let manufacturer_id: Option<String> = scene
         .get("root_entity")
         .and_then(|re| re.get("entity_name"))
         .and_then(|v| v.as_str())
-        .and_then(|s| {
-            // Strip optional "EntityClassDefinition." prefix.
-            let stem = s.rsplit_once('.').map(|(_, r)| r).unwrap_or(s);
-            // First underscore-separated token is the manufacturer code.
-            let prefix = stem
-                .split(|c: char| c == '_' || c == '-' || c.is_whitespace())
-                .next()
-                .unwrap_or("")
-                .to_ascii_lowercase();
-            if prefix.is_empty() { None } else { Some(prefix) }
-        });
+        .and_then(|s| starbreaker_3d::ui_pipeline::root_manufacturer_id(s.rsplit_once('.').map(|(_, r)| r).unwrap_or(s)));
 
     let loc_data = starbreaker_3d::ui_pipeline::UiLocData::load(&p4k);
     // Replay derives the same per-ship UI values the export pipeline feeds

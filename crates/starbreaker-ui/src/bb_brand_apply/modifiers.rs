@@ -352,6 +352,8 @@ fn apply_color_field(field_name: &str, color: [f32; 4], token: Option<&str>, nod
 /// Apply a boolean-typed modifier field.
 fn apply_boolean_field(field_name: &str, value: bool, node: &mut BbNode) {
     match field_name {
+        // A binding-resolved visibility stands (super::BOUND_IS_ACTIVE_KEY).
+        "IsActive" if node.raw.get(super::BOUND_IS_ACTIVE_KEY).is_some() => {}
         "IsActive" => node.is_active = value,
         "SvgFlipHorizontal" | "SvgFlipVertical" => {
             // Write into the authored svgFill structure the IR's asset-layout

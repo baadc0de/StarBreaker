@@ -150,9 +150,16 @@ impl BindingResolver {
                 Some(defaults.lookup_localization(key).unwrap_or(key).to_string())
             }
             "BuildingBlocks_BindingsLocalizedVariable" => {
+                // A localized variable's value is a localization key (a
+                // `LocStringUserVariable` holds `@LOC_EMPTY`, `@ui_...`): it
+                // reads as that key's text. A value without the `@` marker, or
+                // a key the localization does not carry, is used as is.
                 let path = self.ptr_to_path.get(&ptr)?;
-                let val = defaults.lookup_path(path)?;
-                Some(value_to_string(val))
+                let text = value_to_string(defaults.lookup_path(path)?);
+                Some(match text.starts_with('@') {
+                    true => defaults.lookup_localization(&text).map(str::to_string).unwrap_or(text),
+                    false => text,
+                })
             }
             "BuildingBlocks_BindingsLocalizedComponentParameter" => {
                 if let Some(value) = self.eval_localized_component_parameter_override(op, ptr, defaults, seen) {

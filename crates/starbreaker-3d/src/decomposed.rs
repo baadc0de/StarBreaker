@@ -3763,7 +3763,7 @@ fn generated_ui_asset_name(binding: &UiBinding) -> String {
 /// to any single ship or component).  Per-component manufacturer overrides
 /// (e.g. a Bioticorp medical bay installed on a Drake ship) are deferred to
 /// Phase A5 of the UI plan and require DataCore record traversal.
-fn derive_manufacturer_id(root_entity_name: &str) -> Option<String> {
+pub(crate) fn derive_manufacturer_id(root_entity_name: &str) -> Option<String> {
     let prefix = root_entity_name
         .split(|c: char| c == '_' || c == '-' || c.is_whitespace())
         .next()

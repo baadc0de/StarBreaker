@@ -26,6 +26,10 @@ pub struct DefaultValueRegistry {
     mfd_slot_defaults: HashMap<(u32, u32), String>,
     screen_state_colors: HashMap<String, RgbaColor>,
     localization: HashMap<String, String>,
+    /// Whether the paths carry the binding owner's complete user-variable set (the export passes the owner entity's
+    /// `UserVariablesComponentParams`, defaults and instance overrides). A bare-named variable the owner does not
+    /// declare then reads at its type's default instead of as an unknown runtime value.
+    owner_user_variables_known: bool,
 }
 
 impl DefaultValueRegistry {
@@ -71,6 +75,18 @@ impl DefaultValueRegistry {
         reg.set_localization(data.localization.clone());
 
         reg
+    }
+
+    /// Mark the paths as carrying the owner's complete user-variable set (see the field).
+    pub fn set_owner_user_variables_known(&mut self, known: bool) {
+        self.owner_user_variables_known = known;
+    }
+
+    /// Whether a bare-named (owner user) variable `binding` is known: declared by the owner, or undeclared while the
+    /// owner's set is complete (then it reads at its default). A dotted path (`state.*`, an engine namespace) is not
+    /// a user variable.
+    pub fn owner_user_variable_known(&self, binding: &str) -> bool {
+        self.lookup_path(binding).is_some() || (self.owner_user_variables_known && !binding.contains('.') && !binding.contains('/'))
     }
 
     /// Insert or overwrite a binding-path default.

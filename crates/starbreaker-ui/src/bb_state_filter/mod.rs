@@ -92,6 +92,8 @@ mod integer;
 mod tests_a;
 #[cfg(test)]
 mod tests_b;
+#[cfg(test)]
+mod tests_owner_values;
 
 mod component_params;
 
@@ -187,6 +189,9 @@ pub fn instantiated_false_widgets_with_param_inputs_inherited_bindings_and_defau
             }
             if let Some(crate::canvas::Value::Bool(value)) = defaults.lookup_path(binding) {
                 static_vals.insert(binding.to_owned(), *value);
+            } else if defaults.owner_user_variable_known(binding) {
+                // An owner user variable the owner does not declare: its default.
+                static_vals.insert(binding.to_owned(), false);
             }
         }
     }
@@ -195,6 +200,8 @@ pub fn instantiated_false_widgets_with_param_inputs_inherited_bindings_and_defau
         Some(a) => a,
         None => return HashSet::new(),
     };
+    let localized_empty_ops = defaults.map(|d| localized_is_empty_as_static(ops, d, &mut static_vals));
+    let ops: &[serde_json::Value] = localized_empty_ops.as_deref().unwrap_or(ops);
 
     apply_idle_defaults(ops, &mut static_vals);
     let static_nums = numeric_variable_defaults(ops, defaults);
@@ -948,6 +955,49 @@ fn numeric_variable_defaults(
         }
     }
     out
+}
+
+/// `BindingsOperation_BooleanFromLocalizationIsEmpty` over a `BindingsLocalizedVariable` whose value the registry
+/// knows (an owner user variable, localized by the export; an undeclared one is empty when the owner's set is complete)
+/// becomes a static boolean: the op is rewritten as a boolean variable under a synthetic `_LocalizationIsEmpty_:<ptr>`
+/// binding pinned in `static_vals`, so every evaluator of the filter reads it as a known value. The ops are returned
+/// with the rewrites (unchanged when nothing is known).
+fn localized_is_empty_as_static(
+    ops: &[serde_json::Value],
+    defaults: &crate::defaults::DefaultValueRegistry,
+    static_vals: &mut HashMap<String, bool>,
+) -> Vec<serde_json::Value> {
+    let variable_binding = |ptr: &str| -> Option<&str> {
+        let wanted = parse_points_to_ptr(ptr)?;
+        ops.iter()
+            .find(|op| op.get("_Pointer_").and_then(|v| v.as_str()).and_then(parse_ptr_id) == Some(wanted))
+            .filter(|op| op.get("_Type_").and_then(|v| v.as_str()) == Some("BuildingBlocks_BindingsLocalizedVariable"))
+            .and_then(|op| op.get("binding").and_then(|v| v.as_str()))
+    };
+    ops.iter()
+        .map(|op| {
+            let is_empty_op = op.get("_Type_").and_then(|v| v.as_str()) == Some("BindingsOperation_BooleanFromLocalizationIsEmpty");
+            let Some(pointer) = op.get("_Pointer_").and_then(|v| v.as_str()).filter(|_| is_empty_op) else {
+                return op.clone();
+            };
+            let Some(binding) = op.get("input").and_then(|v| v.as_str()).and_then(variable_binding) else {
+                return op.clone();
+            };
+            let text = match defaults.lookup_path(binding) {
+                Some(crate::canvas::Value::Str(s)) => s.clone(),
+                Some(_) => return op.clone(),
+                None if defaults.owner_user_variable_known(binding) => String::new(),
+                None => return op.clone(),
+            };
+            let text = match text.starts_with('@') {
+                true => defaults.lookup_localization(&text).map(str::to_owned).unwrap_or(text),
+                false => text,
+            };
+            let synthetic = format!("_LocalizationIsEmpty_:{pointer}");
+            static_vals.insert(synthetic.clone(), text.trim().is_empty());
+            serde_json::json!({"_Pointer_": pointer, "_Type_": "BuildingBlocks_BindingsBooleanVariable", "binding": synthetic})
+        })
+        .collect()
 }
 
 fn parse_boolean_param_inputs(param_inputs: &[serde_json::Value]) -> HashMap<String, bool> {

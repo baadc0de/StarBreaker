@@ -967,33 +967,72 @@ fn layout_flex_children(
         return;
     }
 
-    for child_id in flow_non_grow {
-        layout_node(
-            child_id,
-            container,
-            scene,
-            csx,
-            csy,
-            animation_sample_percent,
-            rects,
-            draw_order,
-        );
+    // Non-grow items keep their own main-axis size IN the flow (CSS flex: the
+    // grow items share what they leave). They used to be overlaid on the
+    // whole container, so the door pad's header and button shelf sat on top
+    // of its growing DoorButton instead of above and below it.
+    let cross_just = flex
+        .get("crossAxisJustification")
+        .and_then(|v| v.as_str())
+        .or_else(|| flex.get("itemAlignment").and_then(|v| v.as_str()))
+        .unwrap_or("Stretch")
+        .to_ascii_lowercase();
+    let grow_of = |id: BbNodeId| flex_children.iter().find(|c| c.id == id).map(|c| c.grow);
+    let mut flow: Vec<BbNodeId> = children
+        .iter()
+        .copied()
+        .filter(|id| grow_of(*id).is_some() || flow_non_grow.contains(id))
+        .collect();
+    if reversed {
+        flow.reverse();
     }
+    let fixed_main = |id: BbNodeId| -> (f32, f32) {
+        let Some(node) = scene.nodes.get(&id) else { return (0.0, 0.0) };
+        let (main_v, cross_v) = if is_row { (&node.sizing.width, &node.sizing.height) } else { (&node.sizing.height, &node.sizing.width) };
+        let (main_dim, cross_dim, main_scale, cross_scale) =
+            if is_row { (container.w, container.h, csx, csy) } else { (container.h, container.w, csy, csx) };
+        let main = match main_v {
+            BbValue::Other { behavior, .. } if behavior == "Auto" => {
+                auto_content_main_extent(node, scene, is_row, main_scale)
+            }
+            v => resolve_value_for_node(node, v, main_dim, cross_dim, main_scale, is_row),
+        };
+        (main, resolve_value_for_node(node, cross_v, cross_dim, main_dim, cross_scale, !is_row))
+    };
 
-    let n = flex_children.len();
+    let n = flow.len();
     let total_spacing = item_spacing * (n as f32 - 1.0).max(0.0);
     let total_grow: f32 = flex_children.iter().map(|c| c.grow).sum();
+    let non_grow_main: f32 = flow_non_grow.iter().map(|id| fixed_main(*id).0).sum();
 
-    // Main axis: available space divided by grow proportions.
+    // Main axis: the space the non-grow items leave, divided by grow proportions.
     let main_available = if is_row {
-        (container.w - total_spacing).max(0.0)
+        (container.w - total_spacing - non_grow_main).max(0.0)
     } else {
-        (container.h - total_spacing).max(0.0)
+        (container.h - total_spacing - non_grow_main).max(0.0)
     };
 
     let mut cursor = if is_row { container.x } else { container.y };
 
-    for FlexChild { id, grow } in &flex_children {
+    for id in flow {
+        let Some(grow) = grow_of(id) else {
+            let (main, cross) = fixed_main(id);
+            let (cross_start, cross_len) = if is_row { (container.y, container.h) } else { (container.x, container.w) };
+            let cross = if cross_just == "stretch" { cross_len } else { cross };
+            let cross_at = match cross_just.as_str() {
+                "center" => cross_start + (cross_len - cross) * 0.5,
+                "end" | "right" | "bottom" => cross_start + cross_len - cross,
+                _ => cross_start,
+            };
+            let rect = if is_row {
+                Rect { x: cursor, y: cross_at, w: main, h: cross }
+            } else {
+                Rect { x: cross_at, y: cursor, w: cross, h: main }
+            };
+            cursor += main + item_spacing;
+            layout_node_with_rect(id, rect, scene, csx, csy, animation_sample_percent, rects, draw_order);
+            continue;
+        };
         let main_size = (grow / total_grow) * main_available;
         // Cross axis: stretch to fill container (BB default: itemAlignment=Stretch).
         let child_rect = if is_row {
@@ -1013,7 +1052,7 @@ fn layout_flex_children(
         };
         cursor += main_size + item_spacing;
         layout_node_with_rect(
-            *id,
+            id,
             child_rect,
             scene,
             csx,
@@ -1659,7 +1698,16 @@ fn layout_flex_no_grow_children(
                         x += pos_x;
                     }
                 } else if cross_just.eq_ignore_ascii_case("start") && !cross_start_from_end {
-                    x += (node.anchor.x * container.w) + pos_x - (node.pivot.x * w);
+                    // Same carve-out as the Center branch: with no authored
+                    // cross anchor the item sits at the flow's start edge, and
+                    // its pivot does not move it a pivot-fraction of its width
+                    // past it (the light panel's full-width, pivot-0.5 row
+                    // frame hung half off the left of its column).
+                    if node.anchor.x.abs() > f32::EPSILON {
+                        x += (node.anchor.x * container.w) + pos_x - (node.pivot.x * w);
+                    } else {
+                        x += pos_x;
+                    }
                 }
             }
             let cw = if cross_just.eq_ignore_ascii_case("stretch") { container.w } else { w };
@@ -1758,8 +1806,23 @@ fn layout_flex_wrap_children(
             } else {
                 container.y + line_main_offset
             };
+            // `Stretch` on the main axis: the line's items share its free space
+            // equally (the door pad's button shelf: one lock button spans the
+            // bar, two light buttons split it).
+            let stretch_extra = if axis_just_lc == "stretch" && line_items > 0 {
+                ((avail_main - line_main) / line_items as f32).max(0.0)
+            } else {
+                0.0
+            };
 
             for (id, w, h, auto_main) in line {
+                let (w, h) = if auto_main || stretch_extra <= 0.0 {
+                    (w, h)
+                } else if is_row {
+                    (w + stretch_extra, h)
+                } else {
+                    (w, h + stretch_extra)
+                };
                 if auto_main {
                     layout_node(
                         id,
@@ -1955,6 +2018,42 @@ pub(crate) fn row_flex_start_anchor_offset(
 /// - `Other` with a recognised cross-axis behavior (`PercentOfY` for a width
 ///   dimension, `PercentOfX` for height) → `cross_dim * value`.  All other
 ///   unknown behaviors log a warning and fall back to `primary_dim` (fill).
+/// Content extent along one axis of an `Auto`-sized flow item beside growing
+/// siblings: its padding plus the extent of its active, layout-affecting
+/// children — summed (with spacing) when the node itself flows them along that
+/// axis, else the largest. A child counts with a `Fixed` size or, recursively,
+/// an `Auto` one; a `Percent` child depends on this size and adds nothing. A
+/// node with no such content is empty (0).
+fn auto_content_main_extent(node: &crate::bb_scene::BbNode, scene: &BbScene, is_row: bool, scale: f32) -> f32 {
+    let padding = if is_row { node.padding.left + node.padding.right } else { node.padding.top + node.padding.bottom } * scale;
+    let flow = node.raw.get("layoutPolicy").filter(|p| {
+        p.get("_Type_").and_then(|t| t.as_str()).is_some_and(|t| t.contains("FlexContainer"))
+            && p.get("direction")
+                .and_then(|d| d.as_str())
+                .is_some_and(|d| d.to_ascii_lowercase().starts_with("column") != is_row)
+    });
+    let extents: Vec<f32> = node
+        .children
+        .iter()
+        .filter_map(|id| scene.nodes.get(id))
+        .filter(|child| child.is_active && child.raw.get("affectsLayout").and_then(|v| v.as_bool()) != Some(false))
+        .map(|child| match if is_row { &child.sizing.width } else { &child.sizing.height } {
+            BbValue::Fixed(px) => px * scale,
+            BbValue::Other { behavior, .. } if behavior == "Auto" => auto_content_main_extent(child, scene, is_row, scale),
+            _ => 0.0,
+        })
+        .collect();
+    let content = match flow {
+        Some(policy) => {
+            let key = if is_row { "columnSpacing" } else { "rowSpacing" };
+            let spacing = policy.get(key).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32 * scale;
+            extents.iter().sum::<f32>() + spacing * (extents.len() as f32 - 1.0).max(0.0)
+        }
+        None => extents.iter().copied().fold(0.0, f32::max),
+    };
+    padding + content
+}
+
 fn resolve_value(v: &BbValue, primary_dim: f32, cross_dim: f32, canvas_scale: f32, is_width: bool) -> f32 {
     match v {
         BbValue::Fixed(px) => px * canvas_scale,

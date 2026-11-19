@@ -546,6 +546,30 @@ use crate::defaults::DefaultValueRegistry;
         assert_eq!(resolver.resolve_field_bool(7, "IsActive", &defaults), Some(false));
     }
 
+    /// WP-I1 fix pass: a localized-string variable carries a localization KEY (a `LocStringUserVariable` default such as
+    /// the door / light panel's `ui_LocationName = @LOC_EMPTY`), not display text. It reads as the key's localized
+    /// value, so an empty-string key is empty and the panel's room-name header stays hidden (the light panel drew its
+    /// authored "Door Control:" heading, the door header its settings gear). Synthetic keys.
+    #[test]
+    fn localized_variable_reads_its_localization_key() {
+        let ops = [
+            json!({"_Type_": "BuildingBlocks_BindingsBooleanField", "widget": "ptr:7", "field": "IsActive", "input": "ptr:13"}),
+            json!({"_Pointer_": "ptr:13", "_Type_": "BuildingBlocks_BindingsBooleanInvert", "input": "ptr:14"}),
+            json!({"_Pointer_": "ptr:14", "_Type_": "BindingsOperation_BooleanFromLocalizationIsEmpty", "input": "ptr:8"}),
+            json!({"_Pointer_": "ptr:8", "_Type_": "BuildingBlocks_BindingsLocalizedVariable", "binding": "test.location.name"}),
+            json!({"_Type_": "BuildingBlocks_BindingsLocalizedField", "widget": "ptr:9", "field": "ParamInput0", "input": "ptr:8"}),
+        ];
+        let resolver = BindingResolver::from_operations(&ops);
+        let mut defaults = DefaultValueRegistry::default();
+        defaults.insert_localization("test_empty_key", String::new());
+        defaults.insert_localization("test_room_key", "Room".to_string());
+        defaults.insert_path("test.location.name", Value::Str("@test_empty_key".into()));
+        assert_eq!(resolver.resolve_field_bool(7, "IsActive", &defaults), Some(false), "an empty-string key is empty");
+        defaults.insert_path("test.location.name", Value::Str("@test_room_key".into()));
+        assert_eq!(resolver.resolve_field_bool(7, "IsActive", &defaults), Some(true));
+        assert_eq!(resolver.resolve_field_text(9, "ParamInput0", &defaults).as_deref(), Some("Room"), "the key's text");
+    }
+
     /// Review fix: a host binding that resolves to the empty string is a resolved value (an intentionally empty label):
     /// the synthetic component parameter does not fall back to its authored default. Synthetic keys.
     #[test]

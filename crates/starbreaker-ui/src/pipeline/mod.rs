@@ -340,6 +340,12 @@ fn binding_overlay_registry(
     for (path, value) in binding.binding_values {
         overlay.insert_path(path, value.clone());
     }
+    // The export passes the owner's whole user-variable set (bare names beside
+    // the `state.*` booleans): a bare variable the owner does not declare reads
+    // at its default (WP-I1 fix pass).
+    if binding.binding_values.iter().any(|(path, _)| !path.contains('.')) {
+        overlay.set_owner_user_variables_known(true);
+    }
     Some(overlay)
 }
 
@@ -424,10 +430,9 @@ pub fn compile_ir_for_binding_with(
                 .selected_source
                 .as_deref()
                 .and_then(|source| source.strip_prefix("manufacturer:"))
-        })
-        // Keep brand/style resolution deterministic when binding-level
-        // manufacturer metadata is absent.
-        .or(Some("drak"));
+        });
+    // No manufacturer in the data: the canvas resolves without a brand (no
+    // `brandStyles[]` entry is selected; WP-I1 fix pass, the hangar transit panel).
 
     // For an MFD frame canvas, the binding's content canvas selects which of the
     // frame's mutually-exclusive content-view slots is instantiated (the frame
@@ -517,7 +522,7 @@ pub fn compile_ir_for_binding_with(
     let swf_manifest = build_swf_selection_manifest(
         &raw_root_json,
         &resolved,
-        effective_manufacturer_id.unwrap_or("drak"),
+        effective_manufacturer_id.unwrap_or(""), // no brand: no brand-prefixed SWF candidates
         inputs.swf_fetcher,
     );
     let selected_swf_source = swf_manifest
@@ -1001,7 +1006,10 @@ pub(super) fn load_style(
     manufacturer_id: Option<&str>,
     fetcher: &dyn StyleFetcher,
 ) -> ManufacturerStyle {
-    let id = manufacturer_id.unwrap_or("drak");
+    let Some(id) = manufacturer_id else {
+        // No brand in the data: neutral (no palette), not an invented manufacturer.
+        return StyleLoader::for_manufacturer("").neutral_fallback();
+    };
     match fetcher.fetch_manufacturer_style(id) {
         Ok(style) => style,
         Err(e) => {

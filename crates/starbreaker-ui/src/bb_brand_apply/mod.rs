@@ -22,6 +22,10 @@ use crate::bb_brand_style::BrandStyle;
 use crate::bb_loc::LocFetcher;
 use crate::bb_scene::{BbNode, BbNodeId, BbNodeType, BbScene};
 
+/// Raw key recording a visibility a field binding resolved (`finalize_widget_standard_fields`): a style's `IsActive`
+/// modifier does not override it, as the engine sets bound fields over the stylesheet (WP-I1 fix pass).
+pub(crate) const BOUND_IS_ACTIVE_KEY: &str = "_BoundIsActive_";
+
 mod colors;
 mod conditions;
 mod modifiers;

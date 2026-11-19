@@ -315,6 +315,13 @@ fn collect_state_paths(value: &serde_json::Value, paths: &mut std::collections::
     }
 }
 
+/// The manufacturer id the export gives a root entity's UI bindings (`decomposed.rs` `derive_manufacturer_id`), for a
+/// replay (`starbreaker ui render`) to render with the export's brand: `None` for a root without a manufacturer code
+/// (a hangar), whose panels render without a brand.
+pub fn root_manufacturer_id(root_entity_name: &str) -> Option<String> {
+    crate::decomposed::derive_manufacturer_id(root_entity_name)
+}
+
 /// The engine values `binding`'s owner pushes into its canvas for one render (`UiBindingView::binding_values`): its
 /// user variables by name (a localization key localized through `loc`, as the engine pushes the string; an unknown
 /// key stays the key) and every state type's `state.<type>.<state>` booleans: each type in its default state, except
