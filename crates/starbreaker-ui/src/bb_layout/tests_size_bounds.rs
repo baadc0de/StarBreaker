@@ -116,3 +116,42 @@ fn aspect_overrides_height_keeps_fixed_units_square() {
     let r = rect_of(&scene, &result, "square");
     assert!((r.w - 90.0 * unit).abs() < 0.5 && (r.h - 90.0 * unit).abs() < 0.5, "square in canvas units: {r:?}");
 }
+
+/// A growing flex item's allocation respects its bounds (the flow used to hand it
+/// the whole remaining space past a 35-unit maximum).
+#[test]
+fn a_growing_flex_item_respects_its_maximum() {
+    let scene = canvas("useRaw", serde_json::json!([
+        {"_Pointer_": "ptr:1", "_Type_": "BuildingBlocks_DisplayWidget", "name": "root",
+         "sizing": size((1.0, "Percent"), (1.0, "Percent"), serde_json::json!({})),
+         "layoutPolicy": {"_Type_": "BuildingBlocks_FlexContainer", "direction": "Column", "wrap": "NoWrap",
+            "axisJustification": "Start", "crossAxisJustification": "Stretch", "itemAlignment": "Stretch", "columnSpacing": 0, "rowSpacing": 0}},
+        {"_Pointer_": "ptr:2", "_Type_": "BuildingBlocks_DisplayWidget", "name": "grow", "parent": "_PointsTo_:ptr:1",
+         "layoutPolicyItem": {"growProportion": 1.0, "shrinkProportion": 1.0},
+         "sizing": size((1.0, "Percent"), (10.0, "Fixed"), serde_json::json!({
+            "maxHeight": {"_Type_": "BuildingBlocks_FixedOrRelativeValue", "value": 35.0, "behavior": "Fixed"},
+            "enableMaxHeight": true}))}
+    ]));
+    let result = layout(&scene, 1920, 1080);
+    assert!((rect_of(&scene, &result, "grow").h - 35.0).abs() < 0.5, "{:?}", rect_of(&scene, &result, "grow"));
+}
+
+/// A styled bound behaviour (`MaxWidthBehavior` Percent, `sk_strm_buttonsecondarystyles`)
+/// makes the styled value a fraction of the parent.
+#[test]
+fn a_styled_percent_bound_is_a_fraction_of_the_parent() {
+    let mut scene = canvas("useRaw", serde_json::json!([
+        {"_Pointer_": "ptr:1", "_Type_": "BuildingBlocks_DisplayWidget", "name": "root",
+         "sizing": size((1.0, "Percent"), (1.0, "Percent"), serde_json::json!({}))},
+        {"_Pointer_": "ptr:2", "_Type_": "BuildingBlocks_DisplayWidget", "name": "styled", "parent": "_PointsTo_:ptr:1",
+         "sizing": size((1.0, "Percent"), (1.0, "Percent"), serde_json::json!({
+            "maxWidth": {"_Type_": "BuildingBlocks_FixedOrRelativeValue", "value": 64.0, "behavior": "Fixed"}}))}
+    ]));
+    let node = scene.nodes.values_mut().find(|n| n.name == "styled").expect("node");
+    let raw = node.raw.as_object_mut().expect("raw");
+    raw.insert("MaxSizeX".into(), serde_json::json!(0.7));
+    raw.insert("MaxWidthBehavior".into(), serde_json::json!("Percent"));
+    raw.insert("EnableMaxWidth".into(), serde_json::json!(true));
+    let result = layout(&scene, 1920, 1080);
+    assert!((rect_of(&scene, &result, "styled").w - 0.7 * 1920.0).abs() < 0.5, "{:?}", rect_of(&scene, &result, "styled"));
+}

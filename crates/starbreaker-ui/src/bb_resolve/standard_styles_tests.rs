@@ -140,7 +140,7 @@ fn standard_runtime_styles_use_the_default_styles_without_a_matching_brand() {
     let mut scene = host_scene();
     let fetch = fetcher(false);
     expand_widget_standards(&mut scene, &fetch);
-    apply_standard_runtime_styles(&mut scene, None, Some("test"), crate::bb_brand_style::BrandClass::Env, &fetch, None);
+    apply_standard_runtime_styles(&mut scene, None, None, Some("test"), crate::bb_brand_style::BrandClass::Env, &fetch, None);
     assert_eq!(icon_instance(&scene).padding.top, 7.0, "defaultStyles entry");
     let stray = scene.nodes.values().find(|n| n.name == "stray").expect("stray");
     assert_eq!(stray.padding.top, 0.0, "nodes outside the standard's instance are not styled");
@@ -151,7 +151,7 @@ fn standard_runtime_styles_prefer_the_manufacturers_brand_container() {
     let mut scene = host_scene();
     let fetch = fetcher(true);
     expand_widget_standards(&mut scene, &fetch);
-    apply_standard_runtime_styles(&mut scene, None, Some("test"), crate::bb_brand_style::BrandClass::Env, &fetch, None);
+    apply_standard_runtime_styles(&mut scene, None, None, Some("test"), crate::bb_brand_style::BrandClass::Env, &fetch, None);
     assert_eq!(icon_instance(&scene).padding.top, 9.0, "brand entry");
 }
 
@@ -199,7 +199,7 @@ fn standard_runtime_styles_start_from_the_standards_shared_sheet() {
         }
     };
     expand_widget_standards(&mut scene, &fetch);
-    apply_standard_runtime_styles(&mut scene, None, Some("test"), crate::bb_brand_style::BrandClass::Env, &fetch, None);
+    apply_standard_runtime_styles(&mut scene, None, None, Some("test"), crate::bb_brand_style::BrandClass::Env, &fetch, None);
     assert_eq!(icon_instance(&scene).padding.top, 5.0, "shared sheet entry");
 }
 
@@ -282,4 +282,135 @@ fn host_scene_nodes() -> serde_json::Value {
             "iconPreset": "ArrowHollowRight", "customIcon": "UI/Textures/Vector/General/CommonIcons/icon_common_light_low.svg"},
          "labelProperties": {"_Type_": "BuildingBlocks_ComponentLabelProperties", "show": false, "label": "@LOC_PLACEHOLDER"}}
     ])
+}
+
+/// Each synthetic parameter takes only its own modifier family: a Number style on a
+/// slot does not round into the Integer parameter sharing it (the secondary
+/// standard's Number `Icon Scale` and Integer `IconPosition` are both `ParamInput4`),
+/// and an Integer style reaches the Integer parameter. A declared parameter the
+/// expansion did not inject gets its synthetic.
+#[test]
+fn styled_slots_route_by_exact_family_and_create_declared_parameters() {
+    let mut scene = host_scene();
+    expand_widget_standards(&mut scene, &fetcher(false));
+    let host_id = scene.nodes.values().find(|n| n.name == "LightButton_Low").map(|n| n.id).expect("host");
+    let raw = scene.nodes.get_mut(&host_id).and_then(|n| n.raw.as_object_mut()).expect("host raw");
+    raw.insert(crate::bb_brand_apply::STYLED_PARAMS_KEY.into(), serde_json::json!({"Number:ParamInput1": 3.6}));
+    assert!(route_styled_component_params(&mut scene).is_empty(), "no Number parameter on ParamInput1");
+    let raw = scene.nodes.get_mut(&host_id).and_then(|n| n.raw.as_object_mut()).expect("host raw");
+    raw.insert(crate::bb_brand_apply::STYLED_PARAMS_KEY.into(), serde_json::json!({"Integer:ParamInput1": 2.0}));
+    assert_eq!(route_styled_component_params(&mut scene), vec![host_id]);
+    let int_param = scene
+        .operations
+        .iter()
+        .find(|op| op.get("_Type_").and_then(|v| v.as_str()) == Some("_SynthIntegerParam_"))
+        .expect("a synthetic for the declared LabelStyle parameter");
+    assert_eq!(int_param.get("resolvedInt"), Some(&serde_json::json!(2)));
+    let label_style = scene
+        .operations
+        .iter()
+        .find(|op| op.get("name").and_then(|v| v.as_str()) == Some("LabelStyle"))
+        .expect("the declared parameter");
+    assert_eq!(int_param.get("_Pointer_"), label_style.get("_Pointer_"), "the synthetic stands for the declared parameter");
+}
+
+/// A host expanded by a child canvas keeps the look that child's styles gave it: the
+/// parent level applies the standards' runtime styles only to the instances it
+/// expands itself (a parent re-application of the template's padding 7 over the
+/// shelf's own padding 20 was review finding 1).
+#[test]
+fn a_parent_level_does_not_reapply_standard_styles_to_a_childs_instances() {
+    let shelf_url = "file://./test_shelf.json";
+    let shelf = serde_json::json!({
+        "_RecordName_": "BuildingBlocks_Canvas.test_shelf",
+        "_RecordValue_": {
+            "_Type_": "BuildingBlocks_Canvas",
+            "size": {"_Type_": "Vec3", "x": 1920.0, "y": 1080.0, "z": 0.0},
+            "embeddedStyles": [padding_entry(20.0)],
+            "scene": host_scene_nodes(),
+            "operations": []
+        }
+    });
+    let root = serde_json::json!({
+        "_RecordName_": "BuildingBlocks_Canvas.test_door",
+        "_RecordValue_": {
+            "_Type_": "BuildingBlocks_Canvas",
+            "size": {"_Type_": "Vec3", "x": 1920.0, "y": 1080.0, "z": 0.0},
+            "scene": [
+                {"_Pointer_": "ptr:1", "_Type_": "BuildingBlocks_DisplayWidget", "name": "door_root"},
+                {"_Pointer_": "ptr:2", "_Type_": "BuildingBlocks_WidgetCanvas", "name": "Canvas_Shelf", "parent": "_PointsTo_:ptr:1", "canvas": shelf_url}
+            ],
+            "operations": []
+        }
+    });
+    let template = secondary_template(false);
+    let scene = crate::bb_resolve::resolve_canvas_graph(&root, None, &|path| {
+        if path == shelf_url {
+            Ok(shelf.clone())
+        } else if path == tag_database_path() {
+            Ok(tag_database())
+        } else if path == button_secondary_component_standard_path() {
+            Ok(template.clone())
+        } else {
+            Err(format!("no record for '{path}'"))
+        }
+    })
+    .expect("resolved scene");
+    assert_eq!(icon_instance(&scene).padding.top, 20.0, "the shelf's own entry stands");
+}
+
+/// A styled parameter's state tag is in place before the selectors that test it run:
+/// the canvas sets `ShowIcon` (boolean `ParamInput1`) through its styles, and the
+/// standard's embedded entry gated on `show-icon` must see it.
+#[test]
+fn a_styled_parameter_drives_its_state_tag_before_the_cascade() {
+    let mut template = secondary_template(false);
+    let ops = template["_RecordValue_"]["operations"].as_array_mut().expect("ops");
+    ops.push(serde_json::json!({"_Pointer_": "ptr:15", "_Type_": "BuildingBlocks_BindingsTagFromBoolean",
+        "isTrue": {"_RecordId_": "614ba513-7b87-4546-98a1-95e29eca75ec"},
+        "isFalse": {"_RecordId_": "a8477652-49e1-4d42-9480-63d71b75078b"}, "input": "_PointsTo_:ptr:9"}));
+    ops.push(serde_json::json!({"_Type_": "BuildingBlocks_BindingsStringField", "widget": "_PointsTo_:ptr:1",
+        "field": "QuarternaryStateTag", "input": "_PointsTo_:ptr:15"}));
+    template["_RecordValue_"]["defaultStyles"]["entries"] = serde_json::json!([]);
+    template["_RecordValue_"]["embeddedStyles"] = serde_json::json!([{
+        "_Type_": "BuildingBlocks_StyleEntry", "name": "ShownIcon",
+        "conditionsList": [{"conditions": [
+            {"_Type_": "BuildingBlocks_StyleSelectorConditionTag", "tag": {"_RecordId_": ICON_WIDGET_INSTANCE_TAG}},
+            {"_Type_": "BuildingBlocks_StyleSelectorConditionAncestor", "conditions": [
+                {"_Type_": "BuildingBlocks_StyleSelectorConditionTag", "tag": {"_RecordId_": "614ba513-7b87-4546-98a1-95e29eca75ec"}}
+            ], "breakConditions": []}
+        ]}],
+        "modifiers": [{"_Type_": "BuildingBlocks_FieldModifierNumber", "field": "PaddingTop", "value": 3.0}]
+    }]);
+    let mut nodes = host_scene_nodes();
+    nodes[1]["iconProperties"]["show"] = serde_json::json!(false);
+    let root = serde_json::json!({
+        "_RecordName_": "BuildingBlocks_Canvas.test_shelf",
+        "_RecordValue_": {
+            "_Type_": "BuildingBlocks_Canvas",
+            "size": {"_Type_": "Vec3", "x": 1920.0, "y": 1080.0, "z": 0.0},
+            "defaultStyles": {"sharedStyles": null, "entries": [{
+                "_Type_": "BuildingBlocks_StyleEntry", "name": "ShowSecondaryButtonIcon",
+                "conditionsList": [{"conditions": [
+                    {"_Type_": "BuildingBlocks_StyleSelectorConditionTag", "tag": {"_RecordId_": "cf236683-1f17-41ee-a0d2-0e23c5f1c552"}}
+                ]}],
+                "modifiers": [{"_Type_": "BuildingBlocks_FieldModifierBoolean", "field": "ParamInput1", "value": true}]
+            }]},
+            "scene": nodes,
+            "operations": []
+        }
+    });
+    let scene = crate::bb_resolve::resolve_canvas_graph(&root, None, &|path| {
+        if path == tag_database_path() {
+            Ok(tag_database())
+        } else if path == button_secondary_component_standard_path() {
+            Ok(template.clone())
+        } else {
+            Err(format!("no record for '{path}'"))
+        }
+    })
+    .expect("resolved scene");
+    let icon = icon_instance(&scene);
+    assert!(icon.is_active, "the styled ShowIcon shows the icon");
+    assert_eq!(icon.padding.top, 3.0, "the show-icon entry saw the styled state");
 }

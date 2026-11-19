@@ -62,3 +62,12 @@ fn custom_shape_without_own_colour_keeps_the_generic_icon_colour() {
     let node = compile(door_status_shape(serde_json::Value::Null));
     assert_eq!(node.icon_tint_colour_token.as_deref(), Some("MissionObjectives"));
 }
+
+/// A styled literal fill replaces the own colour, its alpha included.
+#[test]
+fn a_styled_literal_fill_replaces_the_own_colour() {
+    let mut shape = door_status_shape(serde_json::json!({"_Type_": "BuildingBlocks_ColorStyle", "color": "Bright", "alpha": 0.2}));
+    shape["FillColor"] = serde_json::json!({"r": 1.0, "g": 0.0, "b": 0.0, "a": 1.0});
+    let node = compile(shape);
+    assert!((node.alpha - 1.0).abs() < 1e-4, "the literal fill's alpha, not the own 0.2: {}", node.alpha);
+}

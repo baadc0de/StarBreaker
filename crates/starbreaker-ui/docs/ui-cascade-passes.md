@@ -53,24 +53,30 @@ to the root canvas only.
 
 Around the table above, per resolve level (`bb_resolve/standard_styles.rs`, `engine_01.rs`):
 
-- **Standard runtime styles** (after state-tag resolution, before pass 2 — the lowest tier): for every
-  host expanded from a widget standard (`_StandardTemplate_`), the template's base modular-kit sheet
-  (`defaultStyles.sharedStyles`, e.g. `modularkit_default_buttonlargestyles`), then its `brandStyles[]`
-  container for the manufacturer, else its `defaultStyles.entries` (the canvas rule), each scoped to
-  that host's subtree. The icon standard's `IconElement` centres glyphs; the large button's default kit
-  centres its label.
-- **Child styles on nested instances**: a standard instance a child canvas does not expand itself (a
-  button's nested icon instance, expanded at the parent level) takes the child canvas's runtime brand and
-  embedded entries, re-applied to that instance's subtree after the parent's expansion (the door shelf's
-  "Override Icon Shelf Button Size" scales the glyph 2x).
+- **Standard runtime styles** (after state-tag resolution, before pass 2 — the lowest tier), for the
+  hosts expanded at THIS level only (a child's instances keep the look its styles gave them): the
+  template's selected container — its `brandStyles[]` container for the canvas style link / manufacturer,
+  else its `defaultStyles` — supplies its kit sheet (`sharedStyles`; the brand container's own link, else
+  the template's `_default` sheet, e.g. `modularkit_default_buttonlargestyles`) and then its entries, each
+  scoped to that host's subtree. The icon standard's `IconElement` centres glyphs; the large button's
+  default kit centres its label.
+- **Styled component parameters, first pass** (after the pending tags, before pass 2): when the canvas's
+  own containers set a `ParamInputN` slot, the canvas cascade runs on a probe copy of the scene; the
+  slots it records (`_StyledParams_`, per modifier family) feed the template parameters of exactly that
+  family (a declared parameter without a synthetic gets one; a host-bound slot keeps its binding), and the
+  state tags they drive (`show-icon` / `hide-icon`) are rebuilt before any selector runs.
+- **Child styles on nested instances** (after pass 2): a standard instance a child canvas does not
+  expand itself (a button's nested icon instance, expanded at the parent level) takes the child canvas's
+  runtime brand and embedded entries (pending-gated entries excluded), re-applied to that instance's
+  subtree (the door shelf's "Override Icon Shelf Button Size" scales the glyph 2x). Only children merged
+  through `WidgetCanvas.canvas` carry them.
 - **Modular-kit sheets are scoped to their standard** (pass 1 / the pipeline re-application): the
   `_buttonlargestyles`, `_buttonprimarystyles` and `_buttonsecondarystyles` sheets apply to the
-  subtrees of large, primary and secondary button hosts respectively (each standard names its own kit
-  sheet in `defaultStyles.sharedStyles`); other sheets stay scene-wide.
-- **Styled component parameters** (after the kit sheets, before `finalize_widget_standard_fields`): a
-  style-set `ParamInputN` (recorded per modifier family in `_StyledParams_`) feeds the template's
-  parameter of the same family on that slot unless the host binds it; the state tags those parameters
-  drive are re-resolved in the host's subtree.
+  subtrees of large, primary and secondary button hosts respectively; other sheets stay scene-wide.
+- **Styled component parameters, second pass** (after the kit sheets, before
+  `finalize_widget_standard_fields`): slots set by entries the probe could not see (state-gated ones) are
+  routed and their state tags rebuilt. Hosts expanded by a child canvas are not reached from a parent
+  level (their host annotations are finalized at the child).
 
 ### Pending-state filtering
 

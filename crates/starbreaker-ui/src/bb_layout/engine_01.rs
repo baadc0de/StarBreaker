@@ -1058,7 +1058,7 @@ fn layout_flex_children(
                 Rect { x: cross_at, y: cursor, w: cross, h: main }
             };
             cursor += main + item_spacing;
-            layout_node_with_rect(id, rect, scene, csx, csy, animation_sample_percent, rects, draw_order);
+            layout_node_with_rect(id, flex_item_rect(scene, id, rect, container, csx, csy), scene, csx, csy, animation_sample_percent, rects, draw_order);
             continue;
         };
         let main_size = (grow / total_grow) * main_available;
@@ -1081,7 +1081,7 @@ fn layout_flex_children(
         cursor += main_size + item_spacing;
         layout_node_with_rect(
             id,
-            child_rect,
+            flex_item_rect(scene, id, child_rect, container, csx, csy),
             scene,
             csx,
             csy,
@@ -1743,7 +1743,7 @@ fn layout_flex_no_grow_children(
         };
         layout_node_with_rect(
             id,
-            rect,
+            flex_item_rect(scene, id, rect, container, csx, csy),
             scene,
             csx,
             csy,
@@ -1898,7 +1898,7 @@ fn layout_flex_wrap_children(
                 };
                 layout_node_with_rect(
                     id,
-                    rect,
+                    flex_item_rect(scene, id, rect, container, csx, csy),
                     scene,
                     csx,
                     csy,

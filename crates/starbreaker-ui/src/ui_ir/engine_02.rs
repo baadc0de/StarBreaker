@@ -681,14 +681,23 @@ pub(crate) fn custom_shape_own_overlay(node: &crate::bb_scene::BbNode) -> Option
         return None;
     }
     let flag = |key: &str| node.raw.get(key).and_then(|v| v.as_bool()).unwrap_or(false);
-    if !flag("renderShape") || !flag("enableColorOverlay") {
+    // A styled `EnableColorOverlay` stands over the authored switch.
+    let overlay = node.raw.get("EnableColorOverlay").and_then(|v| v.as_bool()).unwrap_or_else(|| flag("enableColorOverlay"));
+    if !flag("renderShape") || !overlay {
         return None;
     }
     let colour = node.raw.get("color").filter(|v| v.is_object())?;
-    let alpha = colour.get("alpha").and_then(|v| v.as_f64()).map_or(1.0, |a| (a as f32).clamp(0.0, 1.0));
     let token = colour_style_token(colour);
-    let rgba = parse_raw_colour(colour);
-    (token.is_some() || rgba.is_some()).then_some((token, rgba, alpha))
+    // A role (`ColorStyle`) carries its alpha beside the role; a solid colour
+    // (`ColorSolid { color: SRGBA8 }`) in the colour itself.
+    let rgba = parse_raw_colour(colour).or_else(|| colour.get("color").and_then(parse_raw_colour));
+    let alpha = colour
+        .get("alpha")
+        .and_then(|v| v.as_f64())
+        .map(|a| a as f32)
+        .or(rgba.map(|c| c[3]))
+        .map_or(1.0, |a| a.clamp(0.0, 1.0));
+    (token.is_some() || rgba.is_some()).then_some((token, rgba.map(|c| [c[0], c[1], c[2], 1.0]), alpha))
 }
 
 pub(crate) fn svg_fill_overlay_colour_from_raw(raw: &serde_json::Value) -> Option<[f32; 4]> {

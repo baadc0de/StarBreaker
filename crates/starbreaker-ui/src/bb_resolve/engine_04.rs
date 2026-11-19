@@ -1570,6 +1570,12 @@ fn inject_standard_params(
             continue;
         };
         let Some((_, value)) = params.iter().find(|(name, _)| *name == op_name) else {
+            // Every declared component parameter knows its host: a style can set
+            // its slot (`route_styled_component_params`).
+            let declared = op.get("_Type_").and_then(|v| v.as_str()).is_some_and(|t| t.ends_with("ComponentParameter"));
+            if declared && let Some(map) = op.as_object_mut() {
+                map.insert("_HostNodeId_".to_string(), serde_json::json!(host_id));
+            }
             continue;
         };
         let Some(ptr) = op.get("_Pointer_").and_then(|v| v.as_str()).map(str::to_owned) else {
@@ -2196,46 +2202,9 @@ pub(crate) fn finalize_widget_standard_fields(
     scene: &mut BbScene,
     defaults: &crate::defaults::DefaultValueRegistry,
 ) {
-    // A style entry that supplies a custom icon writes the host's string
-    // `ParamInput0` (the icon contract's CustomIcon parameter — e.g. the Drake
-    // footer's "Button Icons" pixel arrow). Override the injected synthetic.
-    let mut overrides: Vec<(BbNodeId, String)> = Vec::new();
-    for op in &scene.operations {
-        if op.get("_Type_").and_then(|v| v.as_str()) != Some("_SynthStringParam_") {
-            continue;
-        }
-        let Some(host_id) = op.get("_HostNodeId_").and_then(|v| v.as_u64()) else {
-            continue;
-        };
-        let host_id = host_id as BbNodeId;
-        let Some(styled) = scene.nodes.get(&host_id).and_then(|host| {
-            host.raw
-                .get("ParamInput0")
-                .and_then(|v| v.as_str())
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_owned)
-        }) else {
-            continue;
-        };
-        overrides.push((host_id, styled));
-    }
-    for op in &mut scene.operations {
-        if op.get("_Type_").and_then(|v| v.as_str()) != Some("_SynthStringParam_") {
-            continue;
-        }
-        let Some(host_id) = op.get("_HostNodeId_").and_then(|v| v.as_u64()) else {
-            continue;
-        };
-        if let Some((_, styled)) = overrides
-            .iter()
-            .find(|(candidate, _)| *candidate == host_id as BbNodeId)
-            && let Some(map) = op.as_object_mut()
-        {
-            map.insert("resolvedString".to_string(), serde_json::json!(styled));
-        }
-    }
-
+    // A style-set custom icon (the host's String `ParamInput0`, the icon contract's
+    // CustomIcon parameter — e.g. the Drake footer's "Button Icons" pixel arrow) reaches
+    // the template through the typed routing (`route_styled_component_params`).
     // Resolve the templates' bound fields into the expanded nodes only (the
     // hosts annotated during phase 1) — field bindings elsewhere keep their
     // existing handling. Only fields that resolve to a concrete value are

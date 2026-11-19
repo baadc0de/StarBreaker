@@ -209,6 +209,7 @@ fn record_styled_component_param(type_str: &str, field_name: &str, value: Option
     let family = match type_str {
         "BuildingBlocks_FieldModifierBoolean" => "Boolean",
         "BuildingBlocks_FieldModifierNumber" => "Number",
+        "BuildingBlocks_FieldModifierInteger" => "Integer",
         "BuildingBlocks_FieldModifierString" => "String",
         "BuildingBlocks_FieldModifierLocalization" => "Localization",
         _ => return,
@@ -252,6 +253,11 @@ fn modifier_parts(modifier: &serde_json::Value) -> Option<(&str, &str, Option<&s
                     "BuildingBlocks_FieldModifierRecordRefTypeFontStyleRecord" => Some("FontStyleRecord"),
                     "BuildingBlocks_FieldModifierEnumeratedTypeWidthBehavior" => Some("WidthBehavior"),
                     "BuildingBlocks_FieldModifierEnumeratedTypeHeightBehavior" => Some("HeightBehavior"),
+                    // A size bound's behaviour (Fixed / Percent), read with its value by the layout.
+                    "BuildingBlocks_FieldModifierEnumeratedTypeMinWidthBehavior" => Some("MinWidthBehavior"),
+                    "BuildingBlocks_FieldModifierEnumeratedTypeMaxWidthBehavior" => Some("MaxWidthBehavior"),
+                    "BuildingBlocks_FieldModifierEnumeratedTypeMinHeightBehavior" => Some("MinHeightBehavior"),
+                    "BuildingBlocks_FieldModifierEnumeratedTypeMaxHeightBehavior" => Some("MaxHeightBehavior"),
                     "BuildingBlocks_FieldModifierEnumeratedTypeImageScalingBehavior" => Some("ImageScalingBehavior"),
                     "BuildingBlocks_FieldModifierEnumeratedTypeFlexDirection" => Some("FlexDirection"),
                     "BuildingBlocks_FieldModifierEnumeratedTypeFlexAxisJustification" => Some("FlexAxisJustification"),

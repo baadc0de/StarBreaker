@@ -23,7 +23,7 @@ use crate::bb_loc::LocFetcher;
 use crate::bb_scene::{BbNode, BbNodeId, BbNodeType, BbScene};
 
 /// Raw object of the component parameter slots a style set on a node, keyed
-/// `"<Family>:ParamInputN"` (`Boolean`, `Number`, `String`, `Localization`): the
+/// `"<Family>:ParamInputN"` (`Boolean`, `Number`, `Integer`, `String`, `Localization`): the
 /// widget-standard expansion routes them into the template's parameters.
 pub(crate) const STYLED_PARAMS_KEY: &str = "_StyledParams_";
 

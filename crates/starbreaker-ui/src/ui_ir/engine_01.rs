@@ -1519,7 +1519,9 @@ fn build_ui_ir_nodes(
             .unwrap_or_else(|| effective_alpha_for_node(id, node, scene, animation_sample_percent));
         // A custom shape's own overlay colour applies unless a style or the svgFill set one.
         let own_overlay = custom_shape_own_overlay(node).filter(|_| {
-            icon_tint_colour_token_from_raw(&node.raw, true).is_none() && svg_fill_overlay_colour_from_raw(&node.raw).is_none()
+            icon_tint_colour_token_from_raw(&node.raw, true).is_none()
+                && svg_fill_overlay_colour_from_raw(&node.raw).is_none()
+                && fill_colour_from_raw_for_text(&node.raw).is_none()
         });
         let svg_fill_overlay_alpha = svg_fill_overlay_alpha_from_raw(&node.raw).or(own_overlay.as_ref().map(|o| o.2));
         let alpha = alpha_base

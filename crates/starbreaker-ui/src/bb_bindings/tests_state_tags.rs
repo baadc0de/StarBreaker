@@ -589,3 +589,79 @@ use crate::defaults::DefaultValueRegistry;
         let raw = json!({"labelProperties": {"_Type_": "BuildingBlocks_ComponentLabelProperties", "label": "@test_authored"}});
         assert_eq!(resolver.resolve_text(2, &raw, &defaults), "");
     }
+
+    /// The refresh after a style-set component parameter replaces a bound state
+    /// field's tag (`hide-icon` -> `show-icon`) without duplicating it, per node
+    /// of the subtree (a boolean switch over a missing input reads false).
+    #[test]
+    fn refresh_state_tags_replaces_the_bound_fields_tag() {
+        let canvas = json!({
+            "_RecordName_": "test_refresh_state_tags",
+            "_RecordValue_": {
+                "_Type_": "BuildingBlocks_Canvas",
+                "size": {"_Type_": "Vec3", "x": 100.0, "y": 100.0, "z": 0.0},
+                "scene": [
+                    {"_Pointer_": "ptr:1", "_Type_": "BuildingBlocks_DisplayWidget", "name": "root"},
+                    {"_Pointer_": "ptr:2", "_Type_": "BuildingBlocks_DisplayWidget", "name": "unresolved", "parent": "_PointsTo_:ptr:1"}
+                ],
+                "operations": [
+                    {"_Pointer_": "ptr:9", "_Type_": "_SynthBooleanParam_", "resolvedBool": true},
+                    {"_Pointer_": "ptr:10", "_Type_": "BuildingBlocks_BindingsTagFromBoolean",
+                     "isTrue": {"_RecordId_": "11111111-1111-1111-1111-111111111111"},
+                     "isFalse": {"_RecordId_": "22222222-2222-2222-2222-222222222222"}, "input": "_PointsTo_:ptr:9"},
+                    {"_Type_": "BuildingBlocks_BindingsStringField", "widget": "_PointsTo_:ptr:1", "field": "QuarternaryStateTag", "input": "_PointsTo_:ptr:10"},
+                    {"_Pointer_": "ptr:11", "_Type_": "BuildingBlocks_BindingsBooleanVariable", "value": "unknown.runtime.flag"},
+                    {"_Pointer_": "ptr:12", "_Type_": "BuildingBlocks_BindingsTagFromBoolean",
+                     "isTrue": {"_RecordId_": "33333333-3333-3333-3333-333333333333"},
+                     "isFalse": {"_RecordId_": "44444444-4444-4444-4444-444444444444"}, "input": "_PointsTo_:ptr:99"},
+                    {"_Type_": "BuildingBlocks_BindingsStringField", "widget": "_PointsTo_:ptr:2", "field": "PrimaryStateTag", "input": "_PointsTo_:ptr:12"}
+                ]
+            }
+        });
+        let mut scene = crate::bb_scene::parse_bb_canvas(&canvas).expect("parse");
+        let root = scene.nodes.values().find(|n| n.name == "root").map(|n| n.id).expect("root");
+        let other = scene.nodes.values().find(|n| n.name == "unresolved").map(|n| n.id).expect("node");
+        scene.nodes.get_mut(&root).unwrap().style_tag_uuids.push("22222222-2222-2222-2222-222222222222".into());
+        scene.nodes.get_mut(&other).unwrap().style_tag_uuids.push("44444444-4444-4444-4444-444444444444".into());
+        refresh_state_tags_in_subtrees(&mut scene, &[root], &DefaultValueRegistry::default());
+        assert_eq!(scene.nodes[&root].style_tag_uuids, vec!["11111111-1111-1111-1111-111111111111".to_string()]);
+        assert_eq!(scene.nodes[&other].style_tag_uuids, vec!["44444444-4444-4444-4444-444444444444".to_string()], "a missing input reads false");
+    }
+
+    /// Two state fields of one node can produce the same tag: refreshing the second
+    /// (A or B, now B) must not drop the A the first still resolves to, nor an
+    /// authored tag (review finding: per-field removal).
+    #[test]
+    fn refresh_state_tags_keeps_tags_other_fields_and_the_author_supply() {
+        let tag = |id: &str| json!({"_RecordId_": id});
+        let canvas = json!({
+            "_RecordName_": "test_refresh_union",
+            "_RecordValue_": {
+                "_Type_": "BuildingBlocks_Canvas",
+                "size": {"_Type_": "Vec3", "x": 100.0, "y": 100.0, "z": 0.0},
+                "scene": [{"_Pointer_": "ptr:1", "_Type_": "BuildingBlocks_DisplayWidget", "name": "root",
+                           "styleTags": [tag("cccccccc-cccc-cccc-cccc-cccccccccccc")]}],
+                "operations": [
+                    {"_Pointer_": "ptr:9", "_Type_": "_SynthBooleanParam_", "resolvedBool": true},
+                    {"_Pointer_": "ptr:10", "_Type_": "BuildingBlocks_BindingsTagFromBoolean",
+                     "isTrue": tag("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), "isFalse": null, "input": "_PointsTo_:ptr:9"},
+                    {"_Type_": "BuildingBlocks_BindingsStringField", "widget": "_PointsTo_:ptr:1", "field": "PrimaryStateTag", "input": "_PointsTo_:ptr:10"},
+                    {"_Pointer_": "ptr:11", "_Type_": "_SynthBooleanParam_", "resolvedBool": false},
+                    {"_Pointer_": "ptr:12", "_Type_": "BuildingBlocks_BindingsTagFromBoolean",
+                     "isTrue": tag("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), "isFalse": tag("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"), "input": "_PointsTo_:ptr:11"},
+                    {"_Type_": "BuildingBlocks_BindingsStringField", "widget": "_PointsTo_:ptr:1", "field": "SecondaryStateTag", "input": "_PointsTo_:ptr:12"},
+                    {"_Pointer_": "ptr:13", "_Type_": "_SynthBooleanParam_", "resolvedBool": true},
+                    {"_Pointer_": "ptr:14", "_Type_": "BuildingBlocks_BindingsTagFromBoolean",
+                     "isTrue": tag("dddddddd-dddd-dddd-dddd-dddddddddddd"), "isFalse": tag("cccccccc-cccc-cccc-cccc-cccccccccccc"), "input": "_PointsTo_:ptr:13"},
+                    {"_Type_": "BuildingBlocks_BindingsStringField", "widget": "_PointsTo_:ptr:1", "field": "TertiaryStateTag", "input": "_PointsTo_:ptr:14"}
+                ]
+            }
+        });
+        let mut scene = crate::bb_scene::parse_bb_canvas(&canvas).expect("parse");
+        let root = scene.nodes.values().find(|n| n.name == "root").map(|n| n.id).expect("root");
+        refresh_state_tags_in_subtrees(&mut scene, &[root], &DefaultValueRegistry::default());
+        let tags = &scene.nodes[&root].style_tag_uuids;
+        for wanted in ["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "cccccccc-cccc-cccc-cccc-cccccccccccc", "dddddddd-dddd-dddd-dddd-dddddddddddd"] {
+            assert!(tags.iter().any(|t| t == wanted), "{wanted} missing from {tags:?}");
+        }
+    }

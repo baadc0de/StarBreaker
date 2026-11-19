@@ -917,23 +917,6 @@ fn apply_shared_styles(
 /// entries) applied there and must NOT re-run — a blanket re-application
 /// regressed the power footer and icons. `embeddedStyles` is authored as
 /// either a bare entry array or an `{ entries: [...] }` container.
-/// The hosts a widget-standard expansion has run on (`STANDARD_TEMPLATE_KEY`).
-fn expanded_standard_hosts(scene: &BbScene) -> impl Iterator<Item = BbNodeId> + '_ {
-    scene.nodes.iter().filter(|(_, n)| n.raw.get(STANDARD_TEMPLATE_KEY).is_some()).map(|(id, _)| *id)
-}
-
-/// Whether `ancestor` is `node` or one of its ancestors.
-fn is_ancestor(scene: &BbScene, ancestor: BbNodeId, node: BbNodeId) -> bool {
-    let mut current = Some(node);
-    while let Some(id) = current {
-        if id == ancestor {
-            return true;
-        }
-        current = scene.nodes.get(&id).and_then(|n| n.parent);
-    }
-    false
-}
-
 fn collect_late_state_style_entries(
     canvas_json: &serde_json::Value,
     child_pending: Option<&std::collections::HashSet<String>>,
@@ -1759,23 +1742,23 @@ fn resolve_canvas_graph_inner(
     crate::bb_bindings::resolve_state_tags_into_scene(&mut scene, tag_defaults);
     // The expanded standards' own runtime styles: the lowest tier, under every pass below.
     let canvas_class = bb_brand_style::brand_class_for_canvas(root_json.get("_RecordName_").and_then(|v| v.as_str()));
-    apply_standard_runtime_styles(&mut scene, None, manufacturer_id, canvas_class, fetch_by_path, loc_fetcher);
-    for (child_root, passes) in &child_instance_passes {
-        let hosts: Vec<BbNodeId> = expanded_here.iter().copied().filter(|&host| is_ancestor(&scene, *child_root, host)).collect();
-        for host in hosts {
-            for (entries, fills, chrome, identifier, tier) in passes {
-                crate::bb_style_engine::apply(
-                    &mut scene,
-                    &[crate::bb_style_engine::StyleSheet { tier: *tier, identifier: identifier.clone(), fills, chrome, entries, scope: crate::bb_style_engine::SheetScope::Subtree(host) }],
-                    loc_fetcher,
-                );
-            }
-        }
-    }
+    // Only the instances created here: a child's instances keep the look its own styles gave them.
+    apply_standard_runtime_styles(&mut scene, Some(&expanded_here), preferred_brand, manufacturer_id, canvas_class, fetch_by_path, loc_fetcher);
     // State tags whose producing chains are still unresolvable at THIS level
     // (parent-injected params) gate the cascade below: entries referencing
     // them are skipped and re-applied by the parent's deferred pass.
     let pending_state_tags = crate::bb_bindings::pending_state_tags(&scene, tag_defaults);
+    // Style-set component parameters drive state tags the selectors below test (`show-icon`):
+    // the slots this canvas's styles set are found on a probe copy and routed first.
+    if canvas_styles_set_param_slots(record_value, local_style_value.as_ref()) {
+        let mut probe = scene.clone();
+        apply_canvas_style_cascade(&mut probe, root_json, record_value, manufacturer_id, preferred_brand, local_style_value.as_ref(), palette_source, fetch_by_path, loc_fetcher, &pending_state_tags);
+        copy_styled_params(&probe, &mut scene);
+        let restyled = route_styled_component_params(&mut scene);
+        if !restyled.is_empty() {
+            crate::bb_bindings::refresh_state_tags_in_subtrees(&mut scene, &restyled, tag_defaults);
+        }
+    }
     // Deferred child-canvas entries re-run against the freshly resolved state
     // tags, scoped to each child's subtree (see the collection site above).
     // The empty palette keeps colours token-only; an unchanged token is a
@@ -1793,6 +1776,19 @@ fn resolve_canvas_graph_inner(
             }],
             loc_fetcher,
         );
+    }
+    // The child canvases' styles on the instances expanded here inside them, after the
+    // deferred late-state passes (their entry order) and without pending-gated entries.
+    for (child_root, passes) in &child_instance_passes {
+        let hosts: Vec<BbNodeId> = expanded_here.iter().copied().filter(|&host| is_ancestor(&scene, *child_root, host)).collect();
+        for host in hosts {
+            for (entries, fills, chrome, identifier, tier) in passes {
+                let ready: Vec<serde_json::Value> = entries.iter().filter(|e| !entry_references_any_tag(e, &pending_state_tags)).cloned().collect();
+                let scope = crate::bb_style_engine::SheetScope::Subtree(host);
+                let sheet = crate::bb_style_engine::StyleSheet { tier: *tier, identifier: identifier.clone(), fills, chrome, entries: &ready, scope };
+                crate::bb_style_engine::apply(&mut scene, &[sheet], loc_fetcher);
+            }
+        }
     }
     // The expanded standards' own embeddedStyles run against the freshly
     // resolved state tags (the scrollbar's `_Show` → `scrollbar-show` tag
@@ -2670,6 +2666,7 @@ fn scale_node_from_child_canvas(node: &mut crate::bb_scene::BbNode, sx: f32, sy:
     if let Some(text) = node.text.as_mut() {
         scale_bb_value(&mut text.font_size, sy);
     }
+    crate::bb_layout::scale_fixed_size_bounds(node, sx, sy);
     if let Some(border) = node.border.as_mut() {
         let sw = sx.min(sy);
         border.top.width *= sw;
