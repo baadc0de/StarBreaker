@@ -992,9 +992,17 @@ fn layout_flex_children(
         let (main_dim, cross_dim, main_scale, cross_scale) =
             if is_row { (container.w, container.h, csx, csy) } else { (container.h, container.w, csy, csx) };
         let main = match main_v {
-            BbValue::Other { behavior, .. } if behavior == "Auto" => {
-                auto_content_main_extent(node, scene, is_row, main_scale)
-            }
+            // Text measures itself (its intrinsic overrides, else the laid-out
+            // text); any other Auto item is as large as its content.
+            BbValue::Other { behavior, .. } if behavior == "Auto" => textfield_auto_intrinsic_override(node, main_v, main_dim, main_scale, is_row)
+                .or_else(|| component_button_auto_intrinsic_override(node, main_v, main_scale))
+                .or_else(|| {
+                    matches!(node.ty, BbNodeType::WidgetText | BbNodeType::WidgetTextField)
+                        .then(|| node_resolved_text_size(node, main_scale, &crate::text::TextRenderer::new()))
+                        .flatten()
+                        .map(|(w, h)| if is_row { w } else { h })
+                })
+                .unwrap_or_else(|| auto_content_main_extent(node, scene, is_row, main_scale)),
             v => resolve_value_for_node(node, v, main_dim, cross_dim, main_scale, is_row),
         };
         (main, resolve_value_for_node(node, cross_v, cross_dim, main_dim, cross_scale, !is_row))

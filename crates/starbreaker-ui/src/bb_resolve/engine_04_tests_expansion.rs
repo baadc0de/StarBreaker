@@ -445,11 +445,14 @@ fn large_button_label_follows_the_hosts_bound_label_parameter() {
 }
 
 /// The brand's modular-kit LARGE-button sheet (`sk_<brand>_buttonlargestyles`) is
-/// part of the standard-module tier like the primary / secondary sheets: its
-/// entries (the large button's fill and label colours) apply to the scene.
+/// part of the standard-module tier like the primary / secondary sheets, but it
+/// styles large-button instances only (WP-I1 fix pass): applied scene-wide, its
+/// `RootIconWidgetInstance` entries also sized, placed and coloured the icons of
+/// the light panel's SECONDARY buttons (large red icons, top right).
 #[test]
 fn modular_kit_sheets_include_the_large_button_sheet() {
     let mut scene = large_button_host_scene();
+    expand_widget_standards(&mut scene, &large_expansion_fetcher);
     let sheet = serde_json::json!({
         "_RecordValue_": {"entries": [{
             "_Type_": "BuildingBlocks_StyleEntry", "name": "test",
@@ -468,7 +471,9 @@ fn modular_kit_sheets_include_the_large_button_sheet() {
     };
     apply_modular_kit_sheets(&mut scene, "s_test", &fetch, None);
     let root = scene.nodes.values().find(|n| n.name == "root").expect("root");
-    assert!(!root.is_active, "the large-button sheet's entry applies");
+    assert!(root.is_active, "the large-button sheet leaves nodes outside large buttons alone");
+    let instance = scene.nodes.values().find(|n| n.name == "ComponentRoot").expect("merged instance");
+    assert!(!instance.is_active, "the large-button sheet's entry applies inside the large button");
 }
 
 /// A canvas whose `brandStyles` carry no entry for the ship's manufacturer
@@ -736,4 +741,27 @@ fn canvas_merge_keeps_second_band_instances_in_the_second_band() {
     assert!(id("second_instance") >= EXPANSION_ID_BASE_SECOND, "second band kept: {:#x}", id("second_instance"));
     let primary = id("primary_instance");
     assert!((EXPANSION_ID_BASE..EXPANSION_ID_BASE_SECOND).contains(&primary), "primary band kept: {primary:#x}");
+}
+
+/// WP-I1 fix pass: a button host's enumerated `iconPosition` reaches the
+/// template's `IconPosition` integer parameter by the template's own tag
+/// switch (`0 → icon-pos-top`, …), not a copied enum table; the light panel's
+/// rows (`Top`) had no icon-position state, so their glyphs were not laid out
+/// above the label. Synthetic ids and tags.
+#[test]
+fn host_icon_position_is_numbered_by_the_templates_tag_switch() {
+    let tag = |id: &str| serde_json::json!({"_RecordId_": id});
+    let template = serde_json::json!({"_RecordValue_": {"operations": [
+        {"_Pointer_": "ptr:11", "_Type_": "BuildingBlocks_BindingsIntegerComponentParameter", "name": "IconPosition", "parameter": "ParamInput4"},
+        {"_Pointer_": "ptr:12", "_Type_": "BuildingBlocks_BindingsTagFromIntegerSwitch", "input": "_PointsTo_:ptr:11", "values": [
+            {"first": 0, "second": tag("00000000-0000-0000-0000-0000000000a0")},
+            {"first": 3, "second": tag("00000000-0000-0000-0000-0000000000a3")}]}
+    ]}});
+    let tags = serde_json::json!({"tags": [
+        {"_RecordId_": "00000000-0000-0000-0000-0000000000a0", "tagName": "test-pos-top"},
+        {"_RecordId_": "00000000-0000-0000-0000-0000000000a3", "tagName": "test-pos-left"}]});
+    assert_eq!(template_enum_param_index(&template, &tags, "IconPosition", "Top"), Some(0));
+    assert_eq!(template_enum_param_index(&template, &tags, "IconPosition", "Left"), Some(3));
+    assert_eq!(template_enum_param_index(&template, &tags, "IconPosition", "Centre"), None);
+    assert_eq!(template_enum_param_index(&template, &tags, "FillStyle", "Top"), None);
 }

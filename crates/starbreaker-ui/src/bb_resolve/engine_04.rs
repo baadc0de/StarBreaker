@@ -1489,6 +1489,56 @@ fn tag_id_by_name(tag_database: &serde_json::Value, tag_name: &str) -> Option<St
     walk(tag_database, tag_name)
 }
 
+/// The template's integer for an enumerated host property (`iconPosition`
+/// "Top"), read from the template itself: the integer parameter `param_name`
+/// feeds a `TagFromIntegerSwitch` whose pairs name the values
+/// (`0 → icon-pos-top`, `1 → icon-pos-right`, …); the pair whose tag name ends
+/// in the host's value is the index (WP-I1 fix pass). `None` when the template
+/// or the tag database does not name it.
+fn template_enum_param_index(
+    template_json: &serde_json::Value,
+    tag_database: &serde_json::Value,
+    param_name: &str,
+    host_value: &str,
+) -> Option<i64> {
+    fn tag_name_by_id<'a>(value: &'a serde_json::Value, id: &str) -> Option<&'a str> {
+        match value {
+            serde_json::Value::Object(map) => {
+                if map.get("_RecordId_").and_then(|v| v.as_str()).is_some_and(|r| r.eq_ignore_ascii_case(id))
+                    && let Some(name) = map.get("tagName").and_then(|v| v.as_str())
+                {
+                    return Some(name);
+                }
+                map.values().find_map(|child| tag_name_by_id(child, id))
+            }
+            serde_json::Value::Array(items) => items.iter().find_map(|child| tag_name_by_id(child, id)),
+            _ => None,
+        }
+    }
+    let wanted = host_value.trim().to_ascii_lowercase();
+    if wanted.is_empty() {
+        return None;
+    }
+    let ops = template_json.get("_RecordValue_").unwrap_or(template_json).get("operations")?.as_array()?;
+    let param_ptr = ops
+        .iter()
+        .find(|op| {
+            op.get("_Type_").and_then(|v| v.as_str()) == Some("BuildingBlocks_BindingsIntegerComponentParameter")
+                && op.get("name").and_then(|v| v.as_str()) == Some(param_name)
+        })?
+        .get("_Pointer_")?
+        .as_str()?;
+    ops.iter()
+        .filter(|op| op.get("_Type_").and_then(|v| v.as_str()) == Some("BuildingBlocks_BindingsTagFromIntegerSwitch"))
+        .filter(|op| op.get("input").and_then(|v| v.as_str()).map(|i| i.trim_start_matches("_PointsTo_:")) == Some(param_ptr))
+        .flat_map(|op| op.get("values").and_then(|v| v.as_array()).into_iter().flatten())
+        .find_map(|pair| {
+            let id = pair.get("second")?.get("_RecordId_")?.as_str()?;
+            let name = tag_name_by_id(tag_database, id)?;
+            (name.rsplit('-').next()? == wanted).then(|| pair.get("first")?.as_i64()).flatten()
+        })
+}
+
 /// A static component-parameter value fed from the host's authored properties.
 enum ParamValue {
     Int(i64),
@@ -1958,6 +2008,16 @@ pub(crate) fn expand_widget_standards(
                     ("ShowIcon", ParamValue::Bool(icon_properties_show(host))),
                     ("ShowLabel", ParamValue::Bool(label_properties_show(host))),
                 ];
+                // The icon's side of the label (`iconPosition`), as the
+                // template's own tag switch numbers it.
+                if let Some(index) = host
+                    .raw
+                    .get("iconPosition")
+                    .and_then(|v| v.as_str())
+                    .and_then(|value| template_enum_param_index(&template_json, &tag_database, "IconPosition", value))
+                {
+                    params.push(("IconPosition", ParamValue::Int(index)));
+                }
                 // The instance's text field binds its content from the `Label`
                 // component parameter (a localized key); without it the
                 // template's authored default renders instead of the host's.

@@ -106,18 +106,34 @@ pub fn apply_modular_kit_sheets(
                     let palette = module_chrome_palette
                         .as_ref()
                         .unwrap_or(module_style_value);
-                    crate::bb_style_engine::apply(
-                        scene,
-                        &[crate::bb_style_engine::StyleSheet {
-                            tier: crate::bb_style_engine::Tier::StandardModule,
-                            identifier: extract_record_name(&module_path),
-                            fills: module_style_value,
-                            chrome: palette,
-                            entries: entries.as_slice(),
-                            scope: crate::bb_style_engine::SheetScope::Scene,
-                        }],
-                        loc_fetcher,
-                    );
+                    // The large-button sheet styles large-button instances only: its
+                    // generic instance entries (`RootIconWidgetInstance`, …) would
+                    // otherwise also restyle every other button's instances (WP-I1
+                    // fix pass: the light panel's secondary-button icons).
+                    let scopes: Vec<crate::bb_style_engine::SheetScope> = if module_path.contains("_buttonlargestyles") {
+                        scene
+                            .nodes
+                            .iter()
+                            .filter(|(_, node)| node.ty == BbNodeType::ComponentGeneralButtonLarge)
+                            .map(|(id, _)| crate::bb_style_engine::SheetScope::Subtree(*id))
+                            .collect()
+                    } else {
+                        vec![crate::bb_style_engine::SheetScope::Scene]
+                    };
+                    for scope in scopes {
+                        crate::bb_style_engine::apply(
+                            scene,
+                            &[crate::bb_style_engine::StyleSheet {
+                                tier: crate::bb_style_engine::Tier::StandardModule,
+                                identifier: extract_record_name(&module_path),
+                                fills: module_style_value,
+                                chrome: palette,
+                                entries: entries.as_slice(),
+                                scope,
+                            }],
+                            loc_fetcher,
+                        );
+                    }
                 }
             }
             Err(e) => {
