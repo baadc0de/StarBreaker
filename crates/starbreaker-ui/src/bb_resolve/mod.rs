@@ -12,6 +12,7 @@ mod engine_01;
 mod engine_02;
 mod engine_03;
 mod engine_04;
+mod standard_styles;
 
 pub use engine_01::*;
 // engines 02–04 currently export no `pub` items — their cross-module surface
@@ -19,3 +20,4 @@ pub use engine_01::*;
 pub(crate) use engine_02::*;
 pub(crate) use engine_03::*;
 pub(crate) use engine_04::*;
+pub(crate) use standard_styles::*;

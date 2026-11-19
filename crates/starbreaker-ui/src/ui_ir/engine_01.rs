@@ -1517,7 +1517,11 @@ fn build_ui_ir_nodes(
             .as_ref()
             .and_then(|style| style.alpha_override)
             .unwrap_or_else(|| effective_alpha_for_node(id, node, scene, animation_sample_percent));
-        let svg_fill_overlay_alpha = svg_fill_overlay_alpha_from_raw(&node.raw);
+        // A custom shape's own overlay colour applies unless a style or the svgFill set one.
+        let own_overlay = custom_shape_own_overlay(node).filter(|_| {
+            icon_tint_colour_token_from_raw(&node.raw, true).is_none() && svg_fill_overlay_colour_from_raw(&node.raw).is_none()
+        });
+        let svg_fill_overlay_alpha = svg_fill_overlay_alpha_from_raw(&node.raw).or(own_overlay.as_ref().map(|o| o.2));
         let alpha = alpha_base
             * separator_style
                 .as_ref()
@@ -1577,11 +1581,13 @@ fn build_ui_ir_nodes(
             .as_ref()
             .and_then(|i| i.tint_colour)
             .or_else(|| svg_fill_overlay_colour_from_raw(&node.raw))
-            .or_else(|| custom_shape.as_ref().and_then(|_| fill_colour_from_raw_for_text(&node.raw)));
+            .or_else(|| custom_shape.as_ref().and_then(|_| fill_colour_from_raw_for_text(&node.raw)))
+            .or_else(|| own_overlay.as_ref().and_then(|o| o.0.is_none().then_some(o.1).flatten()));
         let icon_tint_colour_token = icon_tint_colour_token_from_raw(
             &node.raw,
             true,
         )
+        .or_else(|| own_overlay.as_ref().and_then(|o| o.0.clone()))
         .or_else(|| icon_tint_colour_token_from_style_tags(&own_style_tags, &node.ty))
         .or_else(|| {
             custom_shape_overlay_icon_default(

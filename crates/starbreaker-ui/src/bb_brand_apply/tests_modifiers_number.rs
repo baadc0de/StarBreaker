@@ -226,3 +226,80 @@ fn per_corner_radius_and_chamfer_modifiers_apply() {
         Some(true)
     );
 }
+
+    /// `SvgContainPositionX/Y` place a contained glyph inside its box: the icon
+    /// widget standard's `IconElement` default entry centres every custom shape
+    /// (0.5 / 0.5) over the authored top-left (0 / 0). They write the
+    /// `svgFill.containPosition*` the IR's asset layout reads (WP-I1 fix pass 2).
+    #[test]
+    fn test_svg_contain_position_writes_raw_svg_fill() {
+        let mut scene = make_test_scene();
+        let brand = BrandStyle {
+            identifier: "test_brand".to_string(),
+            entries: &[json!({
+                "modifiers": [
+                    {"_Type_": "BuildingBlocks_FieldModifierNumber", "field": "SvgContainPositionX", "value": 0.5},
+                    {"_Type_": "BuildingBlocks_FieldModifierNumber", "field": "SvgContainPositionY", "value": 0.25}
+                ]
+            })],
+            raw: &json!({}),
+        };
+
+        apply_brand_modifiers(&mut scene, &brand, None);
+
+        let svg = scene.nodes.get(&1).unwrap().raw.get("svgFill").cloned().unwrap_or_default();
+        assert_eq!(svg.get("containPositionX").and_then(|v| v.as_f64()), Some(0.5));
+        assert_eq!(svg.get("containPositionY").and_then(|v| v.as_f64()), Some(0.25));
+    }
+
+    /// `ScaleX/Y` scale the node about its pivot: the door button shelf's
+    /// "Override Icon Shelf Button Size" doubles the secondary buttons' glyphs.
+    /// They write the authored `scale` vector the layout reads.
+    #[test]
+    fn test_scale_fields_write_raw_scale() {
+        let mut scene = make_test_scene();
+        let brand = BrandStyle {
+            identifier: "test_brand".to_string(),
+            entries: &[json!({
+                "modifiers": [
+                    {"_Type_": "BuildingBlocks_FieldModifierNumber", "field": "ScaleX", "value": 2.0},
+                    {"_Type_": "BuildingBlocks_FieldModifierNumber", "field": "ScaleY", "value": 3.0}
+                ]
+            })],
+            raw: &json!({}),
+        };
+
+        apply_brand_modifiers(&mut scene, &brand, None);
+
+        let scale = scene.nodes.get(&1).unwrap().raw.get("scale").cloned().unwrap_or_default();
+        assert_eq!(scale.get("x").and_then(|v| v.as_f64()), Some(2.0));
+        assert_eq!(scale.get("y").and_then(|v| v.as_f64()), Some(3.0));
+    }
+
+    /// A style that sets a component's `ParamInputN` records the value under its
+    /// modifier family (`Boolean:ParamInput1`): the slot number alone is shared
+    /// by parameters of different types (the secondary button's `ShowIcon` bool,
+    /// `LabelStyle` integer and `Icon AnchorToParentY` number are all
+    /// `ParamInput1`), and the expansion routes it by family.
+    #[test]
+    fn test_param_input_modifiers_record_their_family() {
+        let mut scene = make_test_scene();
+        let brand = BrandStyle {
+            identifier: "test_brand".to_string(),
+            entries: &[json!({
+                "modifiers": [
+                    {"_Type_": "BuildingBlocks_FieldModifierBoolean", "field": "ParamInput1", "value": true},
+                    {"_Type_": "BuildingBlocks_FieldModifierNumber", "field": "ParamInput1", "value": 4.0},
+                    {"_Type_": "BuildingBlocks_FieldModifierString", "field": "ParamInput0", "value": "a.svg"}
+                ]
+            })],
+            raw: &json!({}),
+        };
+
+        apply_brand_modifiers(&mut scene, &brand, None);
+
+        let styled = scene.nodes.get(&1).unwrap().raw.get(STYLED_PARAMS_KEY).cloned().unwrap_or_default();
+        assert_eq!(styled.get("Boolean:ParamInput1"), Some(&json!(true)));
+        assert_eq!(styled.get("Number:ParamInput1"), Some(&json!(4.0)));
+        assert_eq!(styled.get("String:ParamInput0"), Some(&json!("a.svg")));
+    }

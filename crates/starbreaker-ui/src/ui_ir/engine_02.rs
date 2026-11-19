@@ -672,6 +672,25 @@ pub(crate) fn icon_tint_colour_token_from_raw(raw: &serde_json::Value, allow_fil
         })
 }
 
+/// A `WidgetCustomShape`'s OWN overlay colour: the shape authors its glyph, overlay
+/// switch and colour as its own fields (`renderShape`, `enableColorOverlay`, `color`),
+/// next to a generic `svgFill` block whose colour is null (the door footer's
+/// `Icon_DoorStatus`: Bright at 0.7). Returns (role token, literal RGBA, alpha).
+pub(crate) fn custom_shape_own_overlay(node: &crate::bb_scene::BbNode) -> Option<(Option<String>, Option<[f32; 4]>, f32)> {
+    if !matches!(node.ty, crate::bb_scene::BbNodeType::WidgetCustomShape) {
+        return None;
+    }
+    let flag = |key: &str| node.raw.get(key).and_then(|v| v.as_bool()).unwrap_or(false);
+    if !flag("renderShape") || !flag("enableColorOverlay") {
+        return None;
+    }
+    let colour = node.raw.get("color").filter(|v| v.is_object())?;
+    let alpha = colour.get("alpha").and_then(|v| v.as_f64()).map_or(1.0, |a| (a as f32).clamp(0.0, 1.0));
+    let token = colour_style_token(colour);
+    let rgba = parse_raw_colour(colour);
+    (token.is_some() || rgba.is_some()).then_some((token, rgba, alpha))
+}
+
 pub(crate) fn svg_fill_overlay_colour_from_raw(raw: &serde_json::Value) -> Option<[f32; 4]> {
     let svg_fill = raw.get("svgFill")?;
     let render_shape = svg_fill

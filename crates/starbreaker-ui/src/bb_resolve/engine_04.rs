@@ -1431,7 +1431,7 @@ fn icon_widget_standard_path() -> &'static str {
 }
 
 /// Framework record path of the standard secondary-button component template.
-fn button_secondary_component_standard_path() -> &'static str {
+pub(crate) fn button_secondary_component_standard_path() -> &'static str {
     "file://./../../../../../../../libs/foundry/records/ui/buildingblocks/modularkit/standard/components/buttongeneralsecondarycomponentstandard.json"
 }
 
@@ -1452,7 +1452,7 @@ fn button_large_component_standard_path() -> &'static str {
 pub(crate) const LABEL_INSTANCED_KEY: &str = "_LabelInstanced_";
 
 /// Framework record path of the tag database.
-fn tag_database_path() -> &'static str {
+pub(crate) fn tag_database_path() -> &'static str {
     "file://./../../../../../../../libs/foundry/records/tagdatabase/tagdatabase.tagdatabase.json"
 }
 
@@ -1911,6 +1911,17 @@ fn expansion_band_for_host_type(ty: &BbNodeType) -> BbNodeId {
     }
 }
 
+/// Whether a node of this type is expanded from a widget standard.
+pub(crate) fn is_standard_host(ty: &BbNodeType) -> bool {
+    matches!(
+        ty,
+        BbNodeType::WidgetIcon
+            | BbNodeType::ComponentGeneralButton
+            | BbNodeType::ComponentGeneralButtonSecondary
+            | BbNodeType::ComponentGeneralButtonLarge
+    ) || is_scrollbar_component(ty)
+}
+
 /// Phase 1: expand standard templates under their host widgets. Returns the
 /// expanded templates' own `embeddedStyles` entries that participate in the
 /// scene's style application (currently the scrollbar's `RootShow` gate; the
@@ -2124,6 +2135,11 @@ pub(crate) fn expand_widget_standards(
         }
 
         if let Some(host) = scene.nodes.get_mut(&host_id) {
+            // The template this host expanded from: its own runtime styles apply to
+            // the instance (`apply_standard_runtime_styles`).
+            if let Some(raw) = host.raw.as_object_mut() {
+                raw.insert(super::STANDARD_TEMPLATE_KEY.to_string(), serde_json::json!(template_path));
+            }
             // The instance renders the glyph; the host's parse-time preset
             // fallback would draw a duplicate.
             if matches!(

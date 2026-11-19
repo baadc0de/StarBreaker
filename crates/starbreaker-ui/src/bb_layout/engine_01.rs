@@ -158,8 +158,9 @@ pub fn layout(scene: &BbScene, target_w: u32, target_h: u32) -> LayoutResult {
 /// applied (the g-force / velocity ball gauges author 16:9 but their screen is
 /// square), so the square `aspectRatio` ball-area covers the screen while the
 /// readouts crop. A no-op when aspects match (cover == contain) and for
-/// `aspectOverrides*` / `auto` canvases, which FILL the target (non-uniform `sx`/
-/// `sy`) regardless of `cover_fit` — the compass authors `auto` on its wide screen.
+/// `aspectOverrides*` / `auto` canvases, which FILL the target regardless of `cover_fit`:
+/// `auto` non-uniformly (`sx`/`sy` — the compass authors it on its wide screen),
+/// `aspectOverrides*` with square units (the overridden axis absorbs the aspect).
 pub fn layout_with_animation_sample(
     scene: &BbScene,
     target_w: u32,
@@ -178,9 +179,13 @@ pub fn layout_with_animation_sample(
             // filling, its bottom-anchored tick band overflows the shorter target and
             // crops off-screen. No frozen cockpit screen is `auto` (they are `useRaw`
             // / `aspectOverridesWidth`), so this only changes the compass.
-            BbCoordinateMethod::AspectOverridesWidth
-            | BbCoordinateMethod::AspectOverridesHeight
-            | BbCoordinateMethod::Auto => (
+            // `aspectOverrides*`: the target's aspect replaces the named canvas axis and the
+            // other stays authored, so one canvas unit is square — `sy` when the width is
+            // overridden, `sx` when the height is (a Fixed 90 x 90 icon stays square on a
+            // portrait door pad). `auto` fills non-uniformly (above).
+            BbCoordinateMethod::AspectOverridesWidth => (Rect { x: 0.0, y: 0.0, w: target_w as f32, h: target_h as f32 }, sy, sy, sx.min(sy)),
+            BbCoordinateMethod::AspectOverridesHeight => (Rect { x: 0.0, y: 0.0, w: target_w as f32, h: target_h as f32 }, sx, sx, sx.min(sy)),
+            BbCoordinateMethod::Auto => (
                 Rect { x: 0.0, y: 0.0, w: target_w as f32, h: target_h as f32 },
                 sx,
                 sy,
@@ -2083,7 +2088,13 @@ fn is_tiny_fixed_value(v: &BbValue, primary_dim: f32, canvas_scale: f32) -> bool
     }
 }
 
-fn resolve_value_for_node(
+/// A node's extent on one axis, clamped to its enabled size bounds (`size_bounds`).
+fn resolve_value_for_node(node: &crate::bb_scene::BbNode, v: &BbValue, primary_dim: f32, cross_dim: f32, canvas_scale: f32, is_width: bool) -> f32 {
+    let extent = resolve_value_for_node_unbounded(node, v, primary_dim, cross_dim, canvas_scale, is_width);
+    clamp_to_size_bounds(node, extent, primary_dim, canvas_scale, is_width)
+}
+
+fn resolve_value_for_node_unbounded(
     node: &crate::bb_scene::BbNode,
     v: &BbValue,
     primary_dim: f32,

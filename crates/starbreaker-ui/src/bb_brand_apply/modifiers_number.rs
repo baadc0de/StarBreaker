@@ -114,6 +114,19 @@ pub(super) fn apply_number_field(field_name: &str, value: f64, node: &mut BbNode
         "PaddingRight" => node.padding.right = value as f32,
         "PaddingBottom" => node.padding.bottom = value as f32,
         "PaddingLeft" => node.padding.left = value as f32,
+        // A contained glyph's place inside its box (the icon widget standard's
+        // `IconElement` entry centres it): the authored `svgFill` fields the IR's
+        // asset layout reads.
+        "SvgContainPositionX" | "SvgContainPositionY" => {
+            let key = if field_name == "SvgContainPositionX" { "containPositionX" } else { "containPositionY" };
+            set_raw_object_number(node, "svgFill", key, value);
+        }
+        // The node's scale about its pivot: the authored `scale` vector the layout
+        // reads (the door shelf's "Override Icon Shelf Button Size" doubles a glyph).
+        "ScaleX" | "ScaleY" => {
+            let key = if field_name == "ScaleX" { "x" } else { "y" };
+            set_raw_object_number(node, "scale", key, value);
+        }
         "NineSliceTop" | "NineSliceBottom" | "NineSliceLeft" | "NineSliceRight" => {
             // Write to raw for renderer.
             node.raw.as_object_mut().and_then(|obj| {
@@ -140,3 +153,21 @@ pub(super) fn apply_number_field(field_name: &str, value: f64, node: &mut BbNode
     }
 }
 
+/// Write `raw[object][key] = value`, creating the object (and an object `raw`) as needed.
+fn set_raw_object_number(node: &mut BbNode, object: &str, key: &str, value: f64) {
+    if !node.raw.is_object() {
+        node.raw = serde_json::Value::Object(serde_json::Map::new());
+    }
+    let Some(number) = serde_json::Number::from_f64(value) else { return };
+    if let Some(raw) = node.raw.as_object_mut() {
+        let entry = raw
+            .entry(object.to_string())
+            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+        if !entry.is_object() {
+            *entry = serde_json::Value::Object(serde_json::Map::new());
+        }
+        if let Some(map) = entry.as_object_mut() {
+            map.insert(key.to_string(), serde_json::Value::Number(number));
+        }
+    }
+}

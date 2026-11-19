@@ -49,6 +49,29 @@ re-application of the root brand container. **Flag for P4.4 re-audit**:
 this is the one place defaultStyles entries run at all (see below), scoped
 to the root canvas only.
 
+### Widget-standard passes (WP-I1 fix pass 2)
+
+Around the table above, per resolve level (`bb_resolve/standard_styles.rs`, `engine_01.rs`):
+
+- **Standard runtime styles** (after state-tag resolution, before pass 2 — the lowest tier): for every
+  host expanded from a widget standard (`_StandardTemplate_`), the template's base modular-kit sheet
+  (`defaultStyles.sharedStyles`, e.g. `modularkit_default_buttonlargestyles`), then its `brandStyles[]`
+  container for the manufacturer, else its `defaultStyles.entries` (the canvas rule), each scoped to
+  that host's subtree. The icon standard's `IconElement` centres glyphs; the large button's default kit
+  centres its label.
+- **Child styles on nested instances**: a standard instance a child canvas does not expand itself (a
+  button's nested icon instance, expanded at the parent level) takes the child canvas's runtime brand and
+  embedded entries, re-applied to that instance's subtree after the parent's expansion (the door shelf's
+  "Override Icon Shelf Button Size" scales the glyph 2x).
+- **Modular-kit sheets are scoped to their standard** (pass 1 / the pipeline re-application): the
+  `_buttonlargestyles`, `_buttonprimarystyles` and `_buttonsecondarystyles` sheets apply to the
+  subtrees of large, primary and secondary button hosts respectively (each standard names its own kit
+  sheet in `defaultStyles.sharedStyles`); other sheets stay scene-wide.
+- **Styled component parameters** (after the kit sheets, before `finalize_widget_standard_fields`): a
+  style-set `ParamInputN` (recorded per modifier family in `_StyledParams_`) feeds the template's
+  parameter of the same family on that slot unless the host binds it; the state tags those parameters
+  drive are re-resolved in the host's subtree.
+
 ### Pending-state filtering
 
 Entries gated on a PENDING state tag (producing chain unresolvable at this

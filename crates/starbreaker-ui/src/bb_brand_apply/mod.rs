@@ -22,6 +22,11 @@ use crate::bb_brand_style::BrandStyle;
 use crate::bb_loc::LocFetcher;
 use crate::bb_scene::{BbNode, BbNodeId, BbNodeType, BbScene};
 
+/// Raw object of the component parameter slots a style set on a node, keyed
+/// `"<Family>:ParamInputN"` (`Boolean`, `Number`, `String`, `Localization`): the
+/// widget-standard expansion routes them into the template's parameters.
+pub(crate) const STYLED_PARAMS_KEY: &str = "_StyledParams_";
+
 /// Raw key recording a visibility a field binding resolved (`finalize_widget_standard_fields`): a style's `IsActive`
 /// modifier does not override it, as the engine sets bound fields over the stylesheet (WP-I1 fix pass).
 pub(crate) const BOUND_IS_ACTIVE_KEY: &str = "_BoundIsActive_";

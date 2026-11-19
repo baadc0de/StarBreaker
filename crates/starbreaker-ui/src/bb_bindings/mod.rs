@@ -82,6 +82,55 @@ pub fn resolve_state_tags_into_scene(
     }
 }
 
+/// Re-resolve the state-tag bindings of every node under `roots` after a
+/// component parameter changed (a style-set `ShowIcon` turns the instance's
+/// `hide-icon` into `show-icon`): each bound field's candidate tags (its input's
+/// `TagFromIntegerSwitch` values, `TagFromBoolean` isTrue / isFalse) are removed
+/// and the resolved one is added.
+pub fn refresh_state_tags_in_subtrees(
+    scene: &mut crate::bb_scene::BbScene,
+    roots: &[BbNodeId],
+    defaults: &crate::defaults::DefaultValueRegistry,
+) {
+    const STATE_TAG_FIELDS: &[&str] =
+        &["PrimaryStateTag", "SecondaryStateTag", "TertiaryStateTag", "QuarternaryStateTag", "QuinaryStateTag"];
+    let resolver = BindingResolver::from_operations(&scene.operations);
+    let mut stack: Vec<BbNodeId> = roots.to_vec();
+    let mut seen = std::collections::HashSet::new();
+    while let Some(node_id) = stack.pop() {
+        if !seen.insert(node_id) {
+            continue;
+        }
+        let Some(children) = scene.nodes.get(&node_id).map(|n| n.children.clone()) else { continue };
+        stack.extend(children);
+        for field in STATE_TAG_FIELDS {
+            let Some(input_ptrs) = resolver.widget_field_to_input_ptrs.get(&(node_id, field.to_string())) else {
+                continue;
+            };
+            let mut candidates = std::collections::HashSet::new();
+            for op in input_ptrs.iter().filter_map(|ptr| resolver.ptr_to_op.get(ptr)) {
+                let pairs = op.get("values").and_then(|v| v.as_array()).into_iter().flatten().filter_map(|p| p.get("second"));
+                for tag in pairs.chain([op.get("isTrue"), op.get("isFalse")].into_iter().flatten()) {
+                    if let Some(uuid) = tag.get("_RecordId_").and_then(|v| v.as_str()) {
+                        candidates.insert(uuid.to_ascii_lowercase());
+                    }
+                }
+            }
+            let resolved = resolver
+                .resolve_field_text(node_id, field, defaults)
+                .and_then(|reference| state_tag_uuid_from_reference(&reference));
+            if let Some(node) = scene.nodes.get_mut(&node_id) {
+                node.style_tag_uuids.retain(|tag| !candidates.contains(&tag.to_ascii_lowercase()));
+                if let Some(uuid) = resolved
+                    && !node.style_tag_uuids.iter().any(|t| t.eq_ignore_ascii_case(&uuid))
+                {
+                    node.style_tag_uuids.push(uuid);
+                }
+            }
+        }
+    }
+}
+
 /// The PENDING state tags of a scene: every tag a state-tag binding COULD
 /// produce whose producing chain is UNRESOLVABLE right now (an unwired
 /// parent-injected parameter — the annunciator chiclet severities at the

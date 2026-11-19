@@ -9,13 +9,17 @@
 mod debug_draw;
 mod text_intrinsic;
 mod flex_extent;
+mod size_bounds;
 mod engine_01;
 mod engine_02;
 mod engine_03;
+#[cfg(test)]
+mod tests_size_bounds;
 
 pub(crate) use debug_draw::*;
 pub(crate) use text_intrinsic::*;
 pub(crate) use flex_extent::*;
+pub(crate) use size_bounds::*;
 pub use engine_01::*;
 // engines 02-03 currently export no `pub` items — their cross-module surface
 // is `pub(crate)`; widen a glob to `pub use` if one ever gains public API.

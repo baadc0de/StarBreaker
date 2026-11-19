@@ -106,19 +106,28 @@ pub fn apply_modular_kit_sheets(
                     let palette = module_chrome_palette
                         .as_ref()
                         .unwrap_or(module_style_value);
-                    // The large-button sheet styles large-button instances only: its
-                    // generic instance entries (`RootIconWidgetInstance`, …) would
-                    // otherwise also restyle every other button's instances (WP-I1
-                    // fix pass: the light panel's secondary-button icons).
-                    let scopes: Vec<crate::bb_style_engine::SheetScope> = if module_path.contains("_buttonlargestyles") {
-                        scene
+                    // A button sheet styles its own standard's instances only: each
+                    // standard names its kit sheet (`defaultStyles.sharedStyles`:
+                    // `*_buttonsecondarystyles`, `*_buttonstyles` for the primary), and
+                    // their generic instance entries (`RootIconElementInstance` PivotY,
+                    // `RootIcon` sizes) would otherwise restyle every other button's
+                    // instances (the light panel's and door shelf's secondary icons).
+                    let host_type = [
+                        ("_buttonlargestyles", BbNodeType::ComponentGeneralButtonLarge),
+                        ("_buttonprimarystyles", BbNodeType::ComponentGeneralButton),
+                        ("_buttonsecondarystyles", BbNodeType::ComponentGeneralButtonSecondary),
+                    ]
+                    .into_iter()
+                    .find(|(family, _)| module_path.contains(family))
+                    .map(|(_, ty)| ty);
+                    let scopes: Vec<crate::bb_style_engine::SheetScope> = match host_type {
+                        Some(ty) => scene
                             .nodes
                             .iter()
-                            .filter(|(_, node)| node.ty == BbNodeType::ComponentGeneralButtonLarge)
+                            .filter(|(_, node)| node.ty == ty)
                             .map(|(id, _)| crate::bb_style_engine::SheetScope::Subtree(*id))
-                            .collect()
-                    } else {
-                        vec![crate::bb_style_engine::SheetScope::Scene]
+                            .collect(),
+                        None => vec![crate::bb_style_engine::SheetScope::Scene],
                     };
                     for scope in scopes {
                         crate::bb_style_engine::apply(
@@ -908,9 +917,26 @@ fn apply_shared_styles(
 /// entries) applied there and must NOT re-run — a blanket re-application
 /// regressed the power footer and icons. `embeddedStyles` is authored as
 /// either a bare entry array or an `{ entries: [...] }` container.
+/// The hosts a widget-standard expansion has run on (`STANDARD_TEMPLATE_KEY`).
+fn expanded_standard_hosts(scene: &BbScene) -> impl Iterator<Item = BbNodeId> + '_ {
+    scene.nodes.iter().filter(|(_, n)| n.raw.get(STANDARD_TEMPLATE_KEY).is_some()).map(|(id, _)| *id)
+}
+
+/// Whether `ancestor` is `node` or one of its ancestors.
+fn is_ancestor(scene: &BbScene, ancestor: BbNodeId, node: BbNodeId) -> bool {
+    let mut current = Some(node);
+    while let Some(id) = current {
+        if id == ancestor {
+            return true;
+        }
+        current = scene.nodes.get(&id).and_then(|n| n.parent);
+    }
+    false
+}
+
 fn collect_late_state_style_entries(
     canvas_json: &serde_json::Value,
-    child_pending: &std::collections::HashSet<String>,
+    child_pending: Option<&std::collections::HashSet<String>>,
     manufacturer_id: Option<&str>,
     fetch_by_path: &dyn Fn(&str) -> Result<serde_json::Value, String>,
 ) -> Vec<(
@@ -920,14 +946,16 @@ fn collect_late_state_style_entries(
     String,
     crate::bb_style_engine::Tier,
 )> {
-    if child_pending.is_empty() {
+    // `None`: every runtime entry (re-applied to standard instances the parent level
+    // expands inside the child, below).
+    if child_pending.is_some_and(|pending| pending.is_empty()) {
         return Vec::new();
     }
     let record_value = canvas_json.get("_RecordValue_").unwrap_or(canvas_json);
     let filter = |container: &[serde_json::Value]| -> Vec<serde_json::Value> {
         container
             .iter()
-            .filter(|entry| entry_references_any_tag(entry, child_pending))
+            .filter(|entry| child_pending.is_none_or(|pending| entry_references_any_tag(entry, pending)))
             .cloned()
             .collect()
     };
@@ -1437,6 +1465,8 @@ fn resolve_canvas_graph_inner(
         String,
         crate::bb_style_engine::Tier,
     )> = Vec::new();
+    #[allow(clippy::type_complexity)]
+    let mut child_instance_passes: Vec<(BbNodeId, Vec<(Vec<serde_json::Value>, serde_json::Value, serde_json::Value, String, crate::bb_style_engine::Tier)>)> = Vec::new();
 
     {
         let mut canvas_urls = root_canvas_urls;
@@ -1623,7 +1653,7 @@ fn resolve_canvas_graph_inner(
                 child_namespace.is_some(),
             );
             for (entries, fills, chrome, origin_identifier, origin_tier) in
-                collect_late_state_style_entries(&child_json, &child_pending, manufacturer_id, fetch_by_path)
+                collect_late_state_style_entries(&child_json, Some(&child_pending), manufacturer_id, fetch_by_path)
             {
                 deferred_child_style_passes.push((
                     node_id,
@@ -1633,6 +1663,12 @@ fn resolve_canvas_graph_inner(
                     origin_identifier,
                     origin_tier,
                 ));
+            }
+            // A widget standard the child does not expand itself (a button's nested icon
+            // instance, expanded at this level) still takes the child canvas's styles:
+            // they are re-applied to it after this level's expansion.
+            if child_scene.nodes.values().any(|n| n.raw.get(STANDARD_TEMPLATE_KEY).is_none() && is_standard_host(&n.ty)) {
+                child_instance_passes.push((node_id, collect_late_state_style_entries(&child_json, None, manufacturer_id, fetch_by_path)));
             }
             merge_child_scene(&mut scene, child_scene, "", Some(node_id), None);
         }
@@ -1709,7 +1745,9 @@ fn resolve_canvas_graph_inner(
         )
         .map(|brand| brand.identifier)
     });
+    let expanded_before: HashSet<BbNodeId> = expanded_standard_hosts(&scene).collect();
     let standard_embedded_entries = expand_widget_standards(&mut scene, fetch_by_path);
+    let expanded_here: Vec<BbNodeId> = expanded_standard_hosts(&scene).filter(|id| !expanded_before.contains(id)).collect();
     let tag_defaults_override;
     let tag_defaults: &crate::defaults::DefaultValueRegistry =
         if std::env::var("SB_TAGS_NO_DEFAULTS").as_deref() == Ok("1") {
@@ -1719,6 +1757,21 @@ fn resolve_canvas_graph_inner(
             defaults
         };
     crate::bb_bindings::resolve_state_tags_into_scene(&mut scene, tag_defaults);
+    // The expanded standards' own runtime styles: the lowest tier, under every pass below.
+    let canvas_class = bb_brand_style::brand_class_for_canvas(root_json.get("_RecordName_").and_then(|v| v.as_str()));
+    apply_standard_runtime_styles(&mut scene, None, manufacturer_id, canvas_class, fetch_by_path, loc_fetcher);
+    for (child_root, passes) in &child_instance_passes {
+        let hosts: Vec<BbNodeId> = expanded_here.iter().copied().filter(|&host| is_ancestor(&scene, *child_root, host)).collect();
+        for host in hosts {
+            for (entries, fills, chrome, identifier, tier) in passes {
+                crate::bb_style_engine::apply(
+                    &mut scene,
+                    &[crate::bb_style_engine::StyleSheet { tier: *tier, identifier: identifier.clone(), fills, chrome, entries, scope: crate::bb_style_engine::SheetScope::Subtree(host) }],
+                    loc_fetcher,
+                );
+            }
+        }
+    }
     // State tags whose producing chains are still unresolvable at THIS level
     // (parent-injected params) gate the cascade below: entries referencing
     // them are skipped and re-applied by the parent's deferred pass.
@@ -1774,6 +1827,12 @@ fn resolve_canvas_graph_inner(
     }
     // The expanded templates' bound fields resolve against the render's values (a door pad's
     // `state.*` pins, its user variables): a host-bound parameter follows the host's binding.
+    // Style-set component parameters (`ParamInputN`) reach the templates; the state tags
+    // they drive (`show-icon` / `hide-icon`) are re-resolved in those instances.
+    let restyled = route_styled_component_params(&mut scene);
+    if !restyled.is_empty() {
+        crate::bb_bindings::refresh_state_tags_in_subtrees(&mut scene, &restyled, tag_defaults);
+    }
     finalize_widget_standard_fields(&mut scene, defaults);
 
     // `exportNode: false` marks editor-only authored nodes (mock layout

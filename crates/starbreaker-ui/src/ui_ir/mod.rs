@@ -10,6 +10,8 @@ mod engine_01;
 mod engine_02;
 mod engine_03;
 mod engine_04;
+#[cfg(test)]
+mod tests_custom_shape_colour;
 
 pub use engine_01::*;
 // engines 02-04 currently export no `pub` items — their cross-module surface

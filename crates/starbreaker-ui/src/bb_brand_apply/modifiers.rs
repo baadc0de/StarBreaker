@@ -83,6 +83,7 @@ pub(super) fn apply_modifier(
     if type_str.ends_with("CanvasReferenceRecord") {
         return;
     }
+    record_styled_component_param(type_str, field_name, value, node);
 
     match type_str {
         "BuildingBlocks_FieldModifierString" => {
@@ -192,6 +193,36 @@ pub(super) fn apply_modifier(
                     .as_object_mut()
                     .and_then(|obj| obj.insert(field_name.to_string(), value.clone()));
             }
+        }
+    }
+}
+
+/// Record a style-set component parameter slot (`ParamInputN`) under its modifier
+/// family in [`super::STYLED_PARAMS_KEY`] (`"Boolean:ParamInput1"`): the slot number
+/// is shared by parameters of different types, and the widget-standard expansion
+/// routes the value into the template parameter of the same family
+/// (`bb_resolve::route_styled_component_params`). The generic raw write below is kept.
+fn record_styled_component_param(type_str: &str, field_name: &str, value: Option<&serde_json::Value>, node: &mut BbNode) {
+    let is_param_slot = field_name
+        .strip_prefix("ParamInput")
+        .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()));
+    let family = match type_str {
+        "BuildingBlocks_FieldModifierBoolean" => "Boolean",
+        "BuildingBlocks_FieldModifierNumber" => "Number",
+        "BuildingBlocks_FieldModifierString" => "String",
+        "BuildingBlocks_FieldModifierLocalization" => "Localization",
+        _ => return,
+    };
+    let Some(value) = value.filter(|_| is_param_slot) else { return };
+    if !node.raw.is_object() {
+        node.raw = serde_json::Value::Object(serde_json::Map::new());
+    }
+    if let Some(raw) = node.raw.as_object_mut() {
+        let styled = raw
+            .entry(super::STYLED_PARAMS_KEY.to_string())
+            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+        if let Some(map) = styled.as_object_mut() {
+            map.insert(format!("{family}:{field_name}"), value.clone());
         }
     }
 }
