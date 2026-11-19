@@ -280,6 +280,22 @@ pub(super) fn eval_bool_ref(
                     // so the firing-state overlay gate evaluates `false`.
                     super::integer::eval_bool_from_number(input, ptr_to_op, static_nums)
                 }
+                "BuildingBlocks_BindingsBooleanFromTagSwitch" => {
+                    // `defaultValue`, inverted for a tag among the `exceptions`
+                    // (bb_bindings evaluates the same). Scene filtering carries
+                    // no tag values: an input that is an engine variable is
+                    // unbound at rest, so the switch is its default.
+                    let input_op = obj
+                        .get("input")
+                        .and_then(|v| v.as_str())
+                        .and_then(parse_points_to_ptr)
+                        .and_then(|ptr| ptr_to_op.get(&ptr));
+                    let unbound_variable = input_op
+                        .and_then(|op| op.get("_Type_"))
+                        .and_then(|v| v.as_str())
+                        .is_some_and(|ty| ty.starts_with("BuildingBlocks_Bindings") && ty.ends_with("Variable"));
+                    unbound_variable.then(|| obj.get("defaultValue").and_then(|v| v.as_bool()).unwrap_or(false))
+                }
                 _ => None,
             }
         }
@@ -317,6 +333,11 @@ pub(super) fn contains_unset_non_state_variable(
         }
         serde_json::Value::Object(obj) => {
             let ty = obj.get("_Type_").and_then(|v| v.as_str()).unwrap_or("");
+            // A tag switch defines its at-rest value itself (`defaultValue` for an
+            // unbound tag): its input variable is not an unknown runtime value.
+            if ty == "BuildingBlocks_BindingsBooleanFromTagSwitch" {
+                return false;
+            }
             if let Some(binding) = obj.get("binding").and_then(|v| v.as_str()) {
                 if !binding.is_empty() && !is_state_binding(binding) {
                     if ty == "BuildingBlocks_BindingsBooleanVariable" {

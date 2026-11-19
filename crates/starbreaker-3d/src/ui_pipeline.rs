@@ -296,10 +296,16 @@ fn collect_state_paths(value: &serde_json::Value, paths: &mut std::collections::
         serde_json::Value::Object(map) => {
             for (key, v) in map {
                 match (key.as_str(), v.as_str()) {
-                    ("binding", Some(path)) if path.to_ascii_lowercase().starts_with("state.") => {
-                        paths.insert(path.to_ascii_lowercase());
+                    // Binding paths as the registry normalises them (lower case, a leading `/` only marks them absolute).
+                    ("binding", Some(path)) if path.trim_start_matches('/').to_ascii_lowercase().starts_with("state.") => {
+                        paths.insert(path.trim_start_matches('/').to_ascii_lowercase());
                     }
-                    ("canvas", Some(reference)) if reference.ends_with(".json") => refs.push(reference.to_string()),
+                    // Embedded canvases: a widget's `canvas`, and a style's canvas-reference record (`field.value`).
+                    ("canvas" | "value", Some(reference))
+                        if reference.ends_with(".json") && reference.contains("/ui/buildingblocks/") =>
+                    {
+                        refs.push(reference.to_string())
+                    }
                     _ => collect_state_paths(v, paths, refs),
                 }
             }

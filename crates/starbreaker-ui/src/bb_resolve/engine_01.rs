@@ -177,14 +177,17 @@ pub fn modular_style_identifier(
 /// (`s_<mfr>_<family>`, its sibling, `s_<mfr>`) that exists. A canvas whose
 /// `brandStyles` carry no entry for the manufacturer (the door pad's
 /// `I_Door_Standard` on a CRUS ship) still wears the manufacturer's style, and
-/// its modular-kit sheets (`sk_<brand>_*`) style its widget standards.
+/// its modular-kit sheets (`sk_<brand>_*`) style its widget standards. `record_manufacturer_id` is the
+/// screen's KNOWN manufacturer only (the binding's): a render with none (a
+/// socpak environment) gets no brand record, not the pipeline's default brand.
 pub fn modular_style_identifier_with_records(
     root_json: &serde_json::Value,
     manufacturer_id: Option<&str>,
+    record_manufacturer_id: Option<&str>,
     fetch_by_path: &dyn Fn(&str) -> Result<serde_json::Value, String>,
 ) -> Option<String> {
     modular_style_identifier(root_json, manufacturer_id).or_else(|| {
-        manufacturer_brand_record_identifier(root_json, manufacturer_id, fetch_by_path)
+        manufacturer_brand_record_identifier(root_json, record_manufacturer_id, fetch_by_path)
     })
 }
 
@@ -2395,9 +2398,21 @@ pub(crate) fn merge_child_scene(
         .next_back()
         .map(|(&k, _)| k.wrapping_add(1))
         .unwrap_or(band_lo);
+    // A canvas merge keeps each expanded node in its own band: a second-band
+    // instance (a host type added later, e.g. the large button) expanded in an
+    // embedded canvas must not move into the primary band, where it would
+    // renumber the frozen instances of the earlier host types merged after it.
+    let mut next_second: BbNodeId = parent_scene
+        .nodes
+        .range(EXPANSION_ID_BASE_SECOND..)
+        .next_back()
+        .map(|(&k, _)| k.wrapping_add(1))
+        .unwrap_or(EXPANSION_ID_BASE_SECOND);
     let mut id_map: HashMap<BbNodeId, BbNodeId> = HashMap::with_capacity(child_nodes.len());
     for &orig_id in child_nodes.keys() {
-        let counter = if reserve || orig_id >= EXPANSION_ID_BASE {
+        let counter = if !reserve && orig_id >= EXPANSION_ID_BASE_SECOND {
+            &mut next_second
+        } else if reserve || orig_id >= EXPANSION_ID_BASE {
             &mut next_high
         } else {
             &mut next_low

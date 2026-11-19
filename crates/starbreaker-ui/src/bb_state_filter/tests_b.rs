@@ -961,3 +961,21 @@
             "full-width overlapping slot deactivates on a false gate (mutual exclusivity preserved)"
         );
     }
+
+/// Review fix (I1-5): scene filtering evaluates `BindingsBooleanFromTagSwitch` like the binding resolver: an unbound
+/// tag input is the `defaultValue`, so the transit console's `StyleColor_BG_Overlay` (`IsActive` = switch, default
+/// false) is hidden at rest. Synthetic ids.
+#[test]
+fn boolean_from_tag_switch_hides_an_overlay_at_rest() {
+    let rv = serde_json::json!({
+        "_Type_": "BuildingBlocks_Canvas", "staticVariables": [],
+        "operations": [
+            {"_Type_": "BuildingBlocks_BindingsBooleanField", "widget": "_PointsTo_:ptr:23", "field": "IsActive", "input": "_PointsTo_:ptr:24"},
+            {"_Pointer_": "ptr:24", "_Type_": "BuildingBlocks_BindingsBooleanFromTagSwitch", "defaultValue": false,
+             "exceptions": [{"_RecordId_": "00000000-0000-0000-0000-0000000000e1"}], "input": "_PointsTo_:ptr:28"},
+            {"_Pointer_": "ptr:28", "_Type_": "BuildingBlocks_BindingsStringVariable", "binding": "test.enable.tag"}
+        ]
+    });
+    let result = super::instantiated_false_widgets(&rv);
+    assert!(result.contains(&23), "the tag switch's default (false) hides the overlay: {result:?}");
+}

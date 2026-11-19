@@ -41,6 +41,8 @@ pub(super) struct UiRenderKey {
     texture_aspect_bits: Option<u32>,
     /// The owner's user variables, serialized (two door pads hiding different controls render differently).
     user_variables: String,
+    /// The owner's state machine, serialized: every render pins each type's default state.
+    state_types: String,
     /// The owner state pinned by the render (`None`: the default render).
     state: Option<(String, String)>,
 }
@@ -60,6 +62,7 @@ pub(super) fn ui_render_key(binding: &UiBinding, state: Option<(&str, &str)>) ->
         screen_aspect_bits: binding.ui_screen_aspect_w_over_h.map(f32::to_bits),
         texture_aspect_bits: binding.ui_texture_aspect_w_over_h.map(f32::to_bits),
         user_variables: serde_json::to_string(&binding.user_variables).unwrap_or_default(),
+        state_types: serde_json::to_string(&binding.state_types).unwrap_or_default(),
         state: state.map(|(t, s)| (t.to_string(), s.to_string())),
     }
 }
@@ -71,8 +74,8 @@ pub(super) struct UiRenders {
     pub(super) renders: HashMap<UiRenderKey, Result<Vec<u8>, String>>,
     /// Per default identity: the owner states rendered for it, `(state type, state)` in state-machine order.
     pub(super) states: HashMap<UiRenderKey, Vec<(String, String)>>,
-    /// Per default identity: its file stem.
-    stems: HashMap<UiRenderKey, String>,
+    /// Every identity's file stem (defaults and states, allocated in one namespace).
+    stems: StemAllocator,
 }
 
 impl UiRenders {
@@ -80,16 +83,53 @@ impl UiRenders {
     /// key's hash (an identity rendered outside the pre-render).
     pub(super) fn stem(&self, key: &UiRenderKey, binding: &UiBinding) -> String {
         self.stems
+            .by_key
             .get(key)
             .cloned()
             .unwrap_or_else(|| format!("{}_{}", super::generated_ui_asset_name(binding), key_hash(key)))
     }
+
+    /// The file stem of the state render `state_key` of a default stem `stem`: the allocated one, else derived.
+    pub(super) fn state_stem(&self, state_key: &UiRenderKey, stem: &str, state_type: &str, state: &str) -> String {
+        self.stems
+            .by_key
+            .get(state_key)
+            .cloned()
+            .unwrap_or_else(|| format!("{}_{}", state_image_stem(stem, state_type, state), key_hash(state_key)))
+    }
 }
 
+/// A stable 64-bit digest of `key` (`DefaultHasher::new` is unkeyed: the same in every run).
 fn key_hash(key: &UiRenderKey) -> String {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     key.hash(&mut hasher);
-    format!("{:08x}", hasher.finish() as u32)
+    format!("{:016x}", hasher.finish())
+}
+
+/// File stems of render identities, one namespace for default and state renders: an identity takes its wanted name
+/// when no other identity holds it, else the name with its key digest (and a counter in the unlikely event that is
+/// held too). Two different identities never share a stem.
+#[derive(Default)]
+struct StemAllocator {
+    by_key: HashMap<UiRenderKey, String>,
+    by_stem: HashMap<String, UiRenderKey>,
+}
+
+impl StemAllocator {
+    fn assign(&mut self, key: &UiRenderKey, wanted: String) -> String {
+        if let Some(stem) = self.by_key.get(key) {
+            return stem.clone();
+        }
+        let hashed = format!("{wanted}_{}", key_hash(key));
+        let stem = std::iter::once(wanted)
+            .chain(std::iter::once(hashed.clone()))
+            .chain((2u32..).map(|n| format!("{hashed}_{n}")))
+            .find(|candidate| !self.by_stem.contains_key(candidate))
+            .expect("an unbounded candidate sequence");
+        self.by_stem.insert(stem.clone(), key.clone());
+        self.by_key.insert(key.clone(), stem.clone());
+        stem
+    }
 }
 
 /// The file stem of `stem`'s render in state `state` of type `state_type`.
@@ -136,21 +176,12 @@ pub(super) fn prerender_ui_bindings(
     // One representative binding per unique key (first wins; any is equivalent), and stems in binding order.
     let mut representatives: Vec<(UiRenderKey, &UiBinding)> = Vec::new();
     let mut seen: HashSet<UiRenderKey> = HashSet::new();
-    let mut names: HashMap<String, UiRenderKey> = HashMap::new();
     for binding in bindings {
         let key = ui_render_key(binding, None);
         if !seen.insert(key.clone()) {
             continue;
         }
-        let name = super::generated_ui_asset_name(binding);
-        let stem = match names.get(&name) {
-            None => {
-                names.insert(name.clone(), key.clone());
-                name
-            }
-            Some(_) => format!("{name}_{}", key_hash(&key)),
-        };
-        out.stems.insert(key.clone(), stem);
+        out.stems.assign(&key, super::generated_ui_asset_name(binding));
         representatives.push((key, binding));
     }
     // The states each representative's canvas binds (one canvas scan per canvas).
@@ -165,9 +196,12 @@ pub(super) fn prerender_ui_bindings(
             .entry((binding.canvas_guid.clone(), binding.content_canvas_guid.clone()))
             .or_insert_with(|| crate::ui_pipeline::canvas_state_paths(binding, db));
         let variants = bound_state_variants(binding, paths);
+        let stem = out.stems.by_key.get(key).cloned().unwrap_or_default();
         for (state_type, state) in &variants {
+            let state_key = ui_render_key(binding, Some((state_type, state)));
+            out.stems.assign(&state_key, state_image_stem(&stem, state_type, state));
             jobs.push((
-                ui_render_key(binding, Some((state_type, state))),
+                state_key,
                 binding,
                 Some((state_type.clone(), state.clone())),
             ));
@@ -233,5 +267,23 @@ mod tests {
         a.user_variables[0].value = crate::types::UiUserValue::Bool(false);
         assert_ne!(with_vars, ui_render_key(&a, None));
         assert_eq!(state_image_stem("door", "DoorOpenState", "DoorOpened"), "door__dooropenstate_dooropened");
+    }
+
+    /// Review fix: the owner's state machine is part of the identity (two pads alike but for their states render
+    /// and list states differently), and default and state renders share one stem namespace: an identity whose plain
+    /// name another already holds (a default named like another's state image) gets its digest, never the same file.
+    #[test]
+    fn identities_include_the_state_machine_and_stems_never_collide() {
+        let a = UiBinding { canvas_guid: Some("g".into()), ..Default::default() };
+        let mut b = a.clone();
+        b.state_types.push(UiStateType { name: "T".into(), states: vec!["S0".into(), "S1".into()], default_state: "S0".into() });
+        assert_ne!(ui_render_key(&a, None), ui_render_key(&b, None));
+        let mut stems = StemAllocator::default();
+        let door = stems.assign(&ui_render_key(&a, None), "door".into());
+        let state = stems.assign(&ui_render_key(&a, Some(("T", "S1"))), state_image_stem(&door, "T", "S1"));
+        let clash = stems.assign(&ui_render_key(&b, None), state.clone());
+        assert_eq!(door, "door");
+        assert_ne!(clash, state, "a second identity never takes a held stem");
+        assert_eq!(stems.assign(&ui_render_key(&a, None), "other".into()), "door", "an identity keeps its stem");
     }
 }

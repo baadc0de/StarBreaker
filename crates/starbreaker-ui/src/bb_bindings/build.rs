@@ -63,7 +63,10 @@ impl BindingResolver {
         let mut ptr_to_loc_key: HashMap<BbNodeId, String> = HashMap::new();
         for op in operations {
             let type_str = op.get("_Type_").and_then(|v| v.as_str()).unwrap_or("");
-            if type_str == "_SynthLocalizedParam_" {
+            // A host-bound parameter (`hostBoundInputs`) resolves through its
+            // evaluation (host binding first, then this key); its authored key
+            // is not a separate text source.
+            if type_str == "_SynthLocalizedParam_" && op.get("hostBoundInputs").is_none() {
                 let ptr = op
                     .get("_Pointer_")
                     .and_then(|v| v.as_str())

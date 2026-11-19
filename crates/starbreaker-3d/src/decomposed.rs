@@ -3492,7 +3492,7 @@ fn generated_ui_binding_record(
                             root_entity_name,
                             root_geometry_path,
                             root_manufacturer_id,
-                            &state_image_stem(&stem, state_type, state),
+                            &render_cache.state_stem(&state_key, &stem, state_type, state),
                         );
                         file_record.push((path.clone(), state_png.clone()));
                         binding.state_images.push(crate::types::UiStateImage {
@@ -8836,4 +8836,4 @@ mod texture_container_tests;
 
 #[path = "decomposed_ui_renders.rs"]
 mod ui_renders;
-use ui_renders::{UiRenders, prerender_ui_bindings, state_image_stem, ui_render_key};
+use ui_renders::{UiRenders, prerender_ui_bindings, ui_render_key};

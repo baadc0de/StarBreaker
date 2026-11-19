@@ -313,6 +313,24 @@ fn parse_ui_binding(v: &Value) -> Option<UiBinding> {
 /// record name before the GUID, so replay outputs are findable without a
 /// content-match hunt (ledger item 31).
 fn png_name_for_binding(binding: &UiBinding, state: Option<(&str, &str)>, mip: u32) -> String {
+    // An exported operating panel's render carries per-instance values (aspect, user variables, state): its exported
+    // file stem is its identity, so two placements of one canvas do not replay onto one file.
+    let exported = match state {
+        Some((state_type, state)) => binding
+            .state_images
+            .iter()
+            .find(|s| s.state_type == state_type && s.state == state)
+            .map(|s| s.generated_image_path.as_str()),
+        None => binding.generated_image_path.as_deref(),
+    };
+    if !binding.user_variables.is_empty() || binding.ui_texture_aspect_w_over_h.is_some() {
+        if let Some(stem) = exported
+            .and_then(|path| std::path::Path::new(path).file_stem())
+            .and_then(|stem| stem.to_str())
+        {
+            return format!("{stem}_TEX{mip}.png");
+        }
+    }
     let base = binding
         .helper_name
         .as_deref()
@@ -326,7 +344,10 @@ fn png_name_for_binding(binding: &UiBinding, state: Option<(&str, &str)>, mip: u
         .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' { c } else { '_' })
         .collect();
     match state {
-        Some((state_type, state)) => format!("{safe}__{state_type}_{state}_TEX{mip}.png"),
+        Some((state_type, state)) => {
+            let clean = |s: &str| -> String { s.chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect() };
+            format!("{safe}__{}_{}_TEX{mip}.png", clean(state_type), clean(state))
+        }
         None => format!("{safe}_TEX{mip}.png"),
     }
 }
@@ -357,5 +378,23 @@ mod tests {
 
         let guid_only = binding_with(None, None, Some("534bab84-299b"));
         assert_eq!(png_name_for_binding(&guid_only, None, 0), "534bab84-299b_TEX0.png");
+    }
+
+    /// Review fix: two placements of one canvas with different per-instance values replay to their exported stems.
+    #[test]
+    fn png_name_of_a_panel_with_owner_values_is_its_exported_stem() {
+        let mut a = binding_with(Some("Screen"), None, Some("g"));
+        a.ui_texture_aspect_w_over_h = Some(0.5625);
+        a.generated_image_path = Some("Data/UI/Generated/ship/x/y/door_aaaa.png".into());
+        a.state_images.push(starbreaker_3d::types::UiStateImage {
+            state_type: "T".into(),
+            state: "S".into(),
+            generated_image_path: "Data/UI/Generated/ship/x/y/door_aaaa__t_s.png".into(),
+        });
+        let mut b = a.clone();
+        b.generated_image_path = Some("Data/UI/Generated/ship/x/y/door_bbbb.png".into());
+        assert_eq!(png_name_for_binding(&a, None, 0), "door_aaaa_TEX0.png");
+        assert_eq!(png_name_for_binding(&b, None, 0), "door_bbbb_TEX0.png");
+        assert_eq!(png_name_for_binding(&a, Some(("T", "S")), 0), "door_aaaa__t_s_TEX0.png");
     }
 }

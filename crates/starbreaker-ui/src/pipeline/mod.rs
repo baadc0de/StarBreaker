@@ -344,13 +344,14 @@ fn binding_overlay_registry(
 }
 
 /// Render-target size at `aspect_w_over_h` with the pixel area of the authored
-/// target `(w, h)`: `w' × h' = w × h`, `w' / h' = aspect` (rounded, ≥ 1).
-pub(crate) fn texture_aspect_target_size(target: (u32, u32), aspect_w_over_h: f32) -> (u32, u32) {
+/// target `(w, h)`: `w' × h' = w × h`, `w' / h' = aspect` (rounded, ≥ 1). `None` when a side would
+/// exceed 8192 px (the bound of the other sizing paths: an extreme, nearly degenerate UV mapping).
+pub(crate) fn texture_aspect_target_size(target: (u32, u32), aspect_w_over_h: f32) -> Option<(u32, u32)> {
     let area = target.0.max(1) as f64 * target.1.max(1) as f64;
     let aspect = aspect_w_over_h as f64;
     let width = (area * aspect).sqrt().round().max(1.0);
     let height = (area / aspect).sqrt().round().max(1.0);
-    (width as u32, height as u32)
+    (width <= 8192.0 && height <= 8192.0).then_some((width as u32, height as u32))
 }
 
 /// Compile canonical UI IR for a binding.
@@ -497,6 +498,7 @@ pub fn compile_ir_for_binding_with(
     if let Some(style_id) = crate::bb_resolve::modular_style_identifier_with_records(
         &raw_root_json,
         effective_manufacturer_id,
+        b.manufacturer_id,
         &|p| inputs.canvas_fetcher.fetch_canvas_by_path(p).map_err(|e| e.to_string()),
     ) {
         crate::bb_resolve::apply_modular_kit_sheets(
@@ -560,12 +562,14 @@ pub fn compile_ir_for_binding_with(
         if width <= 8192 && height <= 8192 {
             effective_target_size = (width, height);
         }
-    } else if let Some(aspect_w_over_h) = texture_aspect_w_over_h {
+    } else if let Some(size) =
+        texture_aspect_w_over_h.and_then(|aspect| texture_aspect_target_size(inputs.target_size, aspect))
+    {
         // The face's texture-space aspect IS the render target's shape (the
         // texture maps onto the face without distortion); the authored canvas's
         // pixel budget is kept. A `useRaw` canvas covers it like the mesh-aspect
         // path below; `aspectOverrides*` canvases fill it (their layout reflows).
-        effective_target_size = texture_aspect_target_size(inputs.target_size, aspect_w_over_h);
+        effective_target_size = size;
         cover_fit_mesh_aspect = true;
     } else if let Some(aspect_w_over_h) = screen_aspect_w_over_h {
         // height = width / (w/h); the mesh aspect IS the physical screen shape.

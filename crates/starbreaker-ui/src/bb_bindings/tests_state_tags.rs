@@ -545,3 +545,23 @@ use crate::defaults::DefaultValueRegistry;
         defaults.insert_path("test.location.name", Value::Str(String::new()));
         assert_eq!(resolver.resolve_field_bool(7, "IsActive", &defaults), Some(false));
     }
+
+    /// Review fix: a host binding that resolves to the empty string is a resolved value (an intentionally empty label):
+    /// the synthetic component parameter does not fall back to its authored default. Synthetic keys.
+    #[test]
+    fn host_bound_parameter_keeps_a_resolved_empty_label() {
+        let ops = [
+            json!({"_Type_": "BuildingBlocks_BindingsLocalizedField", "widget": "ptr:2", "field": "ParamInput0", "input": "ptr:3"}),
+            json!({"_Pointer_": "ptr:3", "_Type_": "_SynthLocalizedParam_", "resolvedLocKey": "@test_authored",
+                   "hostBoundInputs": ["_PointsTo_:ptr:9"]}),
+            json!({"_Pointer_": "ptr:9", "_Type_": "BuildingBlocks_BindingsLocalizedFromBoolean",
+                   "isTrue": "@test_empty", "isFalse": "@test_empty", "input": "ptr:10"}),
+            json!({"_Pointer_": "ptr:10", "_Type_": "BuildingBlocks_BindingsBooleanVariable", "binding": "test.flag"}),
+        ];
+        let resolver = BindingResolver::from_operations(&ops);
+        let mut defaults = DefaultValueRegistry::default();
+        defaults.insert_localization("test_authored", "authored".to_string());
+        defaults.insert_localization("test_empty", String::new());
+        let raw = json!({"labelProperties": {"_Type_": "BuildingBlocks_ComponentLabelProperties", "label": "@test_authored"}});
+        assert_eq!(resolver.resolve_text(2, &raw, &defaults), "");
+    }

@@ -487,11 +487,13 @@ fn modular_style_falls_back_to_the_manufacturers_brand_record() {
         if path == "s_test_hud" { Ok(serde_json::json!({})) } else { Err("none".into()) }
     };
     assert_eq!(
-        crate::bb_resolve::modular_style_identifier_with_records(&root, Some("test"), &with_record).as_deref(),
+        crate::bb_resolve::modular_style_identifier_with_records(&root, Some("test"), Some("test"), &with_record).as_deref(),
         Some("s_test_hud")
     );
     let none = |_: &str| -> Result<serde_json::Value, String> { Err("none".into()) };
-    assert_eq!(crate::bb_resolve::modular_style_identifier_with_records(&root, Some("test"), &none), None);
+    assert_eq!(crate::bb_resolve::modular_style_identifier_with_records(&root, Some("test"), Some("test"), &none), None);
+    // No known manufacturer (a socpak environment, rendered under the pipeline's default brand): no brand record.
+    assert_eq!(crate::bb_resolve::modular_style_identifier_with_records(&root, Some("test"), None, &with_record), None);
     assert_eq!(crate::bb_resolve::modular_style_identifier(&root, Some("test")), None, "the canvas's own entries");
 }
 
@@ -712,4 +714,26 @@ fn new_host_type_expansion_does_not_shift_existing_low_band_ids() {
         merged_id(&with_new, "existing"), existing_solo,
         "existing host type's instance id is invariant to the new type (no theft)"
     );
+}
+
+/// Review fix: an ordinary canvas merge keeps each expanded instance in its own band. A large button (second band)
+/// expanded inside an embedded canvas stays in the second band when that canvas merges into its parent, so it cannot
+/// take primary-band ids from the earlier host types' frozen instances.
+#[test]
+fn canvas_merge_keeps_second_band_instances_in_the_second_band() {
+    let one = |name: &str| {
+        parse_bb_canvas(&serde_json::json!({"_RecordValue_": {"_Type_": "BuildingBlocks_Canvas", "size": {"x": 1.0, "y": 1.0},
+            "scene": [{"_Pointer_": "ptr:1", "_Type_": "BuildingBlocks_DisplayWidget", "name": name}]}}))
+        .expect("canvas parses")
+    };
+    // The embedded canvas: one primary-band and one second-band expansion instance.
+    let mut embedded = one("embedded_root");
+    merge_child_scene(&mut embedded, one("primary_instance"), "", None, Some(EXPANSION_ID_BASE));
+    merge_child_scene(&mut embedded, one("second_instance"), "", None, Some(EXPANSION_ID_BASE_SECOND));
+    let mut parent = one("parent_root");
+    merge_child_scene(&mut parent, embedded, "", None, None);
+    let id = |name: &str| parent.nodes.values().find(|n| n.name == name).expect("merged").id;
+    assert!(id("second_instance") >= EXPANSION_ID_BASE_SECOND, "second band kept: {:#x}", id("second_instance"));
+    let primary = id("primary_instance");
+    assert!((EXPANSION_ID_BASE..EXPANSION_ID_BASE_SECOND).contains(&primary), "primary band kept: {primary:#x}");
 }

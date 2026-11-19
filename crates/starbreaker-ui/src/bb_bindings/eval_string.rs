@@ -37,10 +37,20 @@ impl BindingResolver {
                     .and_then(|v| v.as_str())
                     .map(str::to_owned)
             }
-            "_SynthStringParam_" => host_bound_inputs(op)
-                .into_iter()
-                .find_map(|input| self.eval_string_ptr(input, defaults, seen).filter(|s| !s.is_empty()))
-                .or_else(|| op.get("resolvedString").and_then(|v| v.as_str()).map(str::to_owned)),
+            "_SynthStringParam_" => {
+                // First host binding with content; a resolved empty string still
+                // wins over the authored value.
+                let resolved: Vec<String> = host_bound_inputs(op)
+                    .into_iter()
+                    .filter_map(|input| self.eval_string_ptr(input, defaults, seen))
+                    .collect();
+                resolved
+                    .iter()
+                    .find(|s| !s.is_empty())
+                    .or(resolved.first())
+                    .cloned()
+                    .or_else(|| op.get("resolvedString").and_then(|v| v.as_str()).map(str::to_owned))
+            }
             "BuildingBlocks_BindingsStringVariable" => {
                 let path = self.ptr_to_path.get(&ptr)?;
                 let val = defaults.lookup_path(path)?;

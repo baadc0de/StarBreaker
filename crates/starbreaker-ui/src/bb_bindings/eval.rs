@@ -165,15 +165,23 @@ impl BindingResolver {
                 Some(defaults.lookup_localization(key).unwrap_or(key).to_string())
             }
             "_SynthLocalizedParam_" => {
+                // The first host binding with content wins; one that resolves to
+                // the empty string is still a resolved value (an intentionally
+                // empty label), not a reason to show the authored default.
+                let mut resolved_empty = false;
                 for input in host_bound_inputs(op) {
                     let mut seen_host = seen.clone();
-                    if let Some(value) = self
+                    match self
                         .eval_localized_ptr(input, defaults, &mut seen_host)
                         .or_else(|| self.eval_string_ptr(input, defaults, &mut seen.clone()))
-                        .filter(|value| !value.is_empty())
                     {
-                        return Some(value);
+                        Some(value) if !value.is_empty() => return Some(value),
+                        Some(_) => resolved_empty = true,
+                        None => {}
                     }
+                }
+                if resolved_empty {
+                    return Some(String::new());
                 }
                 let key = op.get("resolvedLocKey").and_then(|v| v.as_str()).unwrap_or("");
                 if key.is_empty() {

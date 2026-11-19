@@ -1482,18 +1482,21 @@ pub(crate) fn load_interior_mesh_asset(
 
 /// I1-2: measure each UI-bearing interior placement's render-target TEXTURE aspect on its loaded mesh
 /// (`screen_aspect::render_target_texture_aspect`, the `$RenderToTexture` faces' UV layout) and store it on its
-/// bindings that render a screen of the placement itself (`physical`). `mesh_of` returns a unique CGF's loaded mesh
+/// bindings that render an operated screen of the placement itself (`physical`, `source_kiosk_interaction`). `mesh_of` returns a unique CGF's loaded mesh
 /// and materials (the decomposed writer's preload). Measured once per unique CGF.
 pub(crate) fn measure_interior_screen_aspects<'m>(
     interiors: &mut LoadedInteriors,
     mesh_of: impl Fn(&InteriorCgfEntry) -> Option<(&'m crate::types::Mesh, Option<&'m mtl::MtlFile>)>,
 ) {
     let mut aspects: std::collections::HashMap<usize, Option<f32>> = std::collections::HashMap::new();
-    let mut measured = 0usize;
+    let mut sized = 0usize;
+    // A screen of the placement itself that the player operates (door, light and transit panels, kiosks); a display
+    // only shown (a wall HUD) keeps its prior sizing.
+    let operated_screen = |b: &UiBinding| b.binding_kind == "physical" && b.source_kiosk_interaction;
     let unique_cgfs = &interiors.unique_cgfs;
     for container in &mut interiors.containers {
         for placement in &mut container.placements {
-            if !placement.ui_bindings.iter().any(|b| b.binding_kind == "physical") {
+            if !placement.ui_bindings.iter().any(operated_screen) {
                 continue;
             }
             let aspect = *aspects.entry(placement.mesh_index).or_insert_with(|| {
@@ -1502,13 +1505,13 @@ pub(crate) fn measure_interior_screen_aspects<'m>(
                     .and_then(&mesh_of)
                     .and_then(|(mesh, materials)| crate::ui_pipeline::screen_aspect::render_target_texture_aspect(mesh, materials))
             });
-            for binding in placement.ui_bindings.iter_mut().filter(|b| b.binding_kind == "physical") {
+            for binding in placement.ui_bindings.iter_mut().filter(|b| operated_screen(b)) {
                 binding.ui_texture_aspect_w_over_h = aspect;
-                measured += aspect.is_some() as usize;
+                sized += aspect.is_some() as usize;
             }
         }
     }
-    log::info!("interior screen texture aspects: {measured} bindings over {} meshes", aspects.len());
+    log::info!("interior screen texture aspects: {sized} bindings over {} meshes", aspects.len());
 }
 
 pub(crate) fn preload_interior_meshes(

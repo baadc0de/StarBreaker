@@ -113,8 +113,10 @@ fn binding_overlay_registry_pins_the_owners_values() {
 /// and not a stretched 1920 × 1080.
 #[test]
 fn texture_aspect_target_keeps_the_canvas_pixel_area() {
-    assert_eq!(texture_aspect_target_size((1920, 1080), 0.5625), (1080, 1920));
-    assert_eq!(texture_aspect_target_size((1920, 1080), 16.0 / 9.0), (1920, 1080));
-    assert_eq!(texture_aspect_target_size((1920, 1080), 1.0), (1440, 1440));
-    assert_eq!(texture_aspect_target_size((512, 740), 1.0), (616, 616));
+    assert_eq!(texture_aspect_target_size((1920, 1080), 0.5625), Some((1080, 1920)));
+    assert_eq!(texture_aspect_target_size((1920, 1080), 16.0 / 9.0), Some((1920, 1080)));
+    assert_eq!(texture_aspect_target_size((1920, 1080), 1.0), Some((1440, 1440)));
+    assert_eq!(texture_aspect_target_size((512, 740), 1.0), Some((616, 616)));
+    // Review fix: an extreme aspect (a nearly degenerate UV mapping) is refused, not rendered 60000 px wide.
+    assert_eq!(texture_aspect_target_size((1920, 1080), 2000.0), None);
 }
