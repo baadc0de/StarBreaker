@@ -596,3 +596,30 @@ fn localization_modifier_on_text_sets_the_fields_text() {
     let node = scene.nodes.get(&1).unwrap();
     assert_eq!(resolver.resolve_text(1, &node.raw, &defaults), "row");
 }
+
+/// I1-5: a style's text alignment enumerations reach the text field: the modular-kit large-button sheet centres the
+/// label instance (`FieldModifierEnumeratedTypeHorizontalAlignment` / `...VerticalAlignment` `Center`).
+#[test]
+fn alignment_enumerations_set_the_text_alignment() {
+    let mut scene = crate::bb_scene::parse_bb_canvas(&json!({"_RecordValue_": {"_Type_": "BuildingBlocks_Canvas",
+        "size": {"x": 100.0, "y": 100.0},
+        "scene": [{"_Pointer_": "ptr:1", "_Type_": "BuildingBlocks_WidgetTextField", "name": "label",
+                   "textAlignment": "Left", "verticalTextAlignment": "Top"}]}}))
+    .expect("canvas parses");
+    let brand = BrandStyle {
+        identifier: "test_brand".to_string(),
+        entries: &[json!({
+            "modifiers": [
+                {"_Type_": "BuildingBlocks_FieldModifierEnumerated",
+                 "field": {"_Type_": "BuildingBlocks_FieldModifierEnumeratedTypeHorizontalAlignment", "value": "Center"}},
+                {"_Type_": "BuildingBlocks_FieldModifierEnumerated",
+                 "field": {"_Type_": "BuildingBlocks_FieldModifierEnumeratedTypeVerticalAlignment", "value": "Center"}}
+            ]
+        })],
+        raw: &json!({}),
+    };
+    apply_brand_modifiers(&mut scene, &brand, None);
+    let node = scene.nodes.get(&1).unwrap();
+    assert_eq!(node.raw.get("verticalTextAlignment").and_then(|v| v.as_str()), Some("Center"));
+    assert_eq!(node.text.as_ref().map(|t| t.alignment.as_str()), Some("Center"));
+}

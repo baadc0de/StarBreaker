@@ -156,7 +156,9 @@ pub(super) fn apply_modifier(
         | "BuildingBlocks_FieldModifierEnumeratedTypeHeightBehavior"
         | "BuildingBlocks_FieldModifierEnumeratedTypeFlexDirection"
         | "BuildingBlocks_FieldModifierEnumeratedTypeFlexAxisJustification"
-        | "BuildingBlocks_FieldModifierEnumeratedTypeFlexCrossAxisJustification" => {
+        | "BuildingBlocks_FieldModifierEnumeratedTypeFlexCrossAxisJustification"
+        | "BuildingBlocks_FieldModifierEnumeratedTypeHorizontalAlignment"
+        | "BuildingBlocks_FieldModifierEnumeratedTypeVerticalAlignment" => {
             if let Some(value) = value.and_then(|v| v.as_str()) {
                 apply_enum_field(field_name, value, node);
             }
@@ -223,6 +225,8 @@ fn modifier_parts(modifier: &serde_json::Value) -> Option<(&str, &str, Option<&s
                     "BuildingBlocks_FieldModifierEnumeratedTypeFlexDirection" => Some("FlexDirection"),
                     "BuildingBlocks_FieldModifierEnumeratedTypeFlexAxisJustification" => Some("FlexAxisJustification"),
                     "BuildingBlocks_FieldModifierEnumeratedTypeFlexCrossAxisJustification" => Some("FlexCrossAxisJustification"),
+                    "BuildingBlocks_FieldModifierEnumeratedTypeHorizontalAlignment" => Some("HorizontalAlignment"),
+                    "BuildingBlocks_FieldModifierEnumeratedTypeVerticalAlignment" => Some("VerticalAlignment"),
                     _ => None,
                 })
                 .unwrap_or("");
@@ -457,6 +461,21 @@ fn apply_enum_field(field_name: &str, value: &str, node: &mut BbNode) {
                     field_name.to_string(),
                     serde_json::Value::String(value.to_string()),
                 )
+            });
+        }
+        // A text field's alignment (the modular-kit large-button label is centred
+        // both ways): the authored fields the text parse and the IR read.
+        "HorizontalAlignment" => {
+            if let Some(text) = node.text.as_mut() {
+                text.alignment = value.to_string();
+            }
+            node.raw.as_object_mut().and_then(|obj| {
+                obj.insert("textAlignment".to_string(), serde_json::Value::String(value.to_string()))
+            });
+        }
+        "VerticalAlignment" => {
+            node.raw.as_object_mut().and_then(|obj| {
+                obj.insert("verticalTextAlignment".to_string(), serde_json::Value::String(value.to_string()))
             });
         }
         // Flex enum modifiers rewrite the node's AUTHORED layoutPolicy the

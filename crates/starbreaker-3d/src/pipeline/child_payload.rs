@@ -623,7 +623,7 @@ pub(crate) fn entity_record_attach_def_type(
 /// placement path.
 pub(crate) fn ui_binding_for_record(db: &Database, record: &Record) -> Option<UiBinding> {
     let mut binding = ui_binding_for_record_base(db, record)?;
-    if binding.source_kiosk_interaction {
+    if super::ui_owner_values::is_operated_panel(&binding) {
         super::ui_owner_values::attach_owner_ui_values(db, record, &[], &mut binding);
     }
     Some(binding)

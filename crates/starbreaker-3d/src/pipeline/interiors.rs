@@ -947,16 +947,16 @@ fn interior_ui_bindings_for_mesh(
         binding.source_kiosk_interaction = source.as_ref().is_some_and(|(record, _)| {
             super::child_payload::entity_record_has_kiosk_interaction(db, record)
         });
+        binding.source_item_type = source.as_ref().and_then(|(record, _)| {
+            super::child_payload::entity_record_attach_def_type(db, record)
+        });
         // An operated UI renders with its owner's values (class user variables with this placement's instance
         // values, its state machine).
-        if binding.source_kiosk_interaction
+        if super::ui_owner_values::is_operated_panel(&binding)
             && let Some((record, _)) = source.as_ref()
         {
             super::ui_owner_values::attach_owner_ui_values(db, record, &mesh.entity.overrides.user_variables, &mut binding);
         }
-        binding.source_item_type = source.and_then(|(record, _)| {
-            super::child_payload::entity_record_attach_def_type(db, record)
-        });
         binding.source_entity_name = mesh
             .cgf_path
             .rsplit(['/', '\\'])
@@ -976,7 +976,7 @@ fn interior_ui_bindings_for_mesh(
     let Some(mut binding) = super::child_payload::ui_binding_for_record(db, record) else {
         return Vec::new();
     };
-    if binding.source_kiosk_interaction && !mesh.entity.overrides.user_variables.is_empty() {
+    if super::ui_owner_values::is_operated_panel(&binding) && !mesh.entity.overrides.user_variables.is_empty() {
         super::ui_owner_values::attach_owner_ui_values(db, record, &mesh.entity.overrides.user_variables, &mut binding);
     }
     binding.source_entity_name = source_entity_name;
@@ -1492,7 +1492,7 @@ pub(crate) fn measure_interior_screen_aspects<'m>(
     let mut sized = 0usize;
     // A screen of the placement itself that the player operates (door, light and transit panels, kiosks); a display
     // only shown (a wall HUD) keeps its prior sizing.
-    let operated_screen = |b: &UiBinding| b.binding_kind == "physical" && b.source_kiosk_interaction;
+    let operated_screen = |b: &UiBinding| super::ui_owner_values::is_operated_panel(b);
     let unique_cgfs = &interiors.unique_cgfs;
     for container in &mut interiors.containers {
         for placement in &mut container.placements {

@@ -173,6 +173,16 @@ pub(crate) fn user_variable_array_lengths(variables: &[UiUserVariable]) -> Vec<(
         .collect()
 }
 
+/// Whether `binding` is the UI of a panel the player operates, from data only (the SC_UE_ModelViewer consumer's rule,
+/// contract "Consumer"): a `physical` binding of a resolved owner that is not a `Display` item, or is one with
+/// `KioskInteractionEntityComponentParams` (door, light and transit panels, kiosks). Its render carries the owner's
+/// values and, for an interior placement, the face's texture aspect.
+pub(crate) fn is_operated_panel(binding: &UiBinding) -> bool {
+    binding.binding_kind == "physical"
+        && binding.source_owner_resolved
+        && (binding.source_item_type.as_deref() != Some("Display") || binding.source_kiosk_interaction)
+}
+
 /// Set `binding`'s owner values from `record`, with `overrides` (a placement's instance values) applied.
 pub(crate) fn attach_owner_ui_values(
     db: &Database,
@@ -248,5 +258,24 @@ mod tests {
         assert_eq!(variables[2].value, UiUserValue::Bool(false));
         assert_eq!(variables[3].value, UiUserValue::Int(7));
         assert_eq!(variables[4].value, UiUserValue::Float(0.5), "an unparsable override is skipped");
+    }
+
+    /// Owner values and texture aspects are for operated panels only: a resolved owner that is not a display item, or a
+    /// display the player operates; never a display only shown (a wall HUD, an MFD) or an unresolved owner.
+    #[test]
+    fn owner_values_are_for_operated_panels() {
+        let b = |kind: &str, item: Option<&str>, resolved: bool, kiosk: bool| UiBinding {
+            binding_kind: kind.into(),
+            source_item_type: item.map(str::to_string),
+            source_owner_resolved: resolved,
+            source_kiosk_interaction: kiosk,
+            ..Default::default()
+        };
+        assert!(is_operated_panel(&b("physical", Some("ControlPanel"), true, false)), "a light panel without a kiosk");
+        assert!(is_operated_panel(&b("physical", None, true, true)), "a transit panel");
+        assert!(is_operated_panel(&b("physical", Some("Display"), true, true)), "a kiosk");
+        assert!(!is_operated_panel(&b("physical", Some("Display"), true, false)), "a wall HUD");
+        assert!(!is_operated_panel(&b("mfd", Some("ControlPanel"), true, true)));
+        assert!(!is_operated_panel(&b("physical", None, false, false)), "an unresolved owner");
     }
 }
