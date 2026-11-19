@@ -1229,10 +1229,11 @@ The SC_UE_ModelViewer Unreal importer (scviewer WP-I1) binds an image only to an
 operating panel's screen: a `physical` binding whose owner is resolved
 (`source_owner_resolved`) and either is not a `Display` item or is operated
 (`source_kiosk_interaction`), not `default_state_is_off`. It assigns per face: a binding whose
-`helper_name` names a node of the mesh owns that node's subtree, the others own
-the faces no helper claims, and a material slot whose faces resolve to different
-outcomes stays dark. A binding without the `source_item_type` key (an older
-export) is left dark.
+`helper_name` names a node of the mesh owns that node's subtree, the entity's own
+other bindings own the faces no helper claims (a binding propagated from another
+entity whose helper is not on the mesh claims none), and a material slot whose
+faces resolve to different outcomes stays dark. A binding without these keys (an
+older export) or with an unresolved owner is left dark.
 
 ## Metadata-only animation catalogue
 
