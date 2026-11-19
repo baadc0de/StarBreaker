@@ -907,6 +907,9 @@ fn interior_ui_bindings_for_mesh(
     {
         // The inline canvas overrides the class's content, not what the entity is.
         binding.source_owner_resolved = source.is_some();
+        binding.source_kiosk_interaction = source.as_ref().is_some_and(|(record, _)| {
+            super::child_payload::entity_record_has_kiosk_interaction(db, record)
+        });
         binding.source_item_type = source.and_then(|(record, _)| {
             super::child_payload::entity_record_attach_def_type(db, record)
         });
@@ -1692,6 +1695,15 @@ mod tests {
         assert_eq!(unknown.len(), 1);
         assert_eq!(unknown[0].source_item_type, None);
         assert!(!unknown[0].source_owner_resolved);
+        // A display item the player operates (the hangar ship-selector kiosk, KioskInteractionEntityComponentParams) is
+        // told from a display only shown (the HUD wall screen, an MFD) by its owner's kiosk component.
+        let kiosk = super::interior_ui_bindings_for_mesh(&db, &mesh(None, Some("ShipSelectorKiosk_Hangar_HighTech_1_a"), None));
+        assert_eq!(kiosk.len(), 1);
+        assert_eq!(kiosk[0].source_item_type.as_deref(), Some("Display"));
+        assert!(kiosk[0].source_kiosk_interaction);
+        assert!(!hud[0].source_kiosk_interaction && !mfd[0].source_kiosk_interaction);
+        assert!(door[0].source_kiosk_interaction); // door panels are operated through the same component
+        assert!(lift[0].source_kiosk_interaction);
     }
 
     fn test_ui_binding() -> UiBinding {
@@ -1728,6 +1740,7 @@ mod tests {
             ui_screen_aspect_w_over_h: None,
             source_item_type: None,
             source_owner_resolved: false,
+            source_kiosk_interaction: false,
         }
     }
 

@@ -859,6 +859,9 @@ pub struct UiBinding {
     /// Whether the entity whose UI component this is was resolved to its DataCore record. `false` (an inline-canvas
     /// placement with no entity class) means `source_item_type` is unknown, not absent.
     pub source_owner_resolved: bool,
+    /// Whether that entity has a `KioskInteractionEntityComponentParams` component: the player operates its UI (door and
+    /// light panels, transit panels, ship-selector and freight kiosks), unlike a display only shown (MFDs, HUDs, signage).
+    pub source_kiosk_interaction: bool,
 }
 
 pub struct EntityPayload {

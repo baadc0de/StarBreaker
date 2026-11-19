@@ -287,6 +287,10 @@ fn parse_ui_binding(v: &Value) -> Option<UiBinding> {
             .get("source_owner_resolved")
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
+        source_kiosk_interaction: obj
+            .get("source_kiosk_interaction")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
     })
 }
 

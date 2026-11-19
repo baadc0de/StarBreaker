@@ -2610,6 +2610,7 @@ fn ui_binding_json(binding: &UiBinding) -> serde_json::Value {
         "ui_screen_aspect_w_over_h": binding.ui_screen_aspect_w_over_h,
         "source_item_type": binding.source_item_type,
         "source_owner_resolved": binding.source_owner_resolved,
+        "source_kiosk_interaction": binding.source_kiosk_interaction,
     })
 }
 
@@ -3793,6 +3794,7 @@ mod manufacturer_id_tests {
         assert_eq!(super::ui_binding_json(&binding)["source_owner_resolved"], false);
         binding.source_owner_resolved = true;
         assert_eq!(super::ui_binding_json(&binding)["source_owner_resolved"], true);
+        assert_eq!(super::ui_binding_json(&binding)["source_kiosk_interaction"], false);
     }
 
     #[test]
@@ -3830,6 +3832,7 @@ mod manufacturer_id_tests {
             ui_screen_aspect_w_over_h: None,
             source_item_type: None,
             source_owner_resolved: false,
+            source_kiosk_interaction: false,
         };
 
         assert_eq!(generated_ui_type_segment("Objects/Spaceships/Ships/DRAK/Clipper/exterior/test.cga"), "ship");

@@ -602,6 +602,11 @@ fn entity_record_category(db: &Database, record: &starbreaker_datacore::types::R
         .filter(|category| !category.is_empty())
 }
 
+/// Whether an entity has `KioskInteractionEntityComponentParams` (the player operates its UI: transit panels, kiosks).
+pub(crate) fn entity_record_has_kiosk_interaction(db: &Database, record: &starbreaker_datacore::types::Record) -> bool {
+    query_value_path(db, record, "Components[KioskInteractionEntityComponentParams]").is_some()
+}
+
 pub(crate) fn entity_record_attach_def_type(
     db: &Database,
     record: &starbreaker_datacore::types::Record,
@@ -669,6 +674,7 @@ pub(crate) fn ui_binding_for_record(db: &Database, record: &Record) -> Option<Ui
                 ui_screen_aspect_w_over_h: None,
                 source_item_type: entity_record_attach_def_type(db, record),
                 source_owner_resolved: true,
+                source_kiosk_interaction: entity_record_has_kiosk_interaction(db, record),
             });
         }
     }
@@ -723,6 +729,7 @@ pub(crate) fn ui_binding_for_record(db: &Database, record: &Record) -> Option<Ui
                 ui_screen_aspect_w_over_h: None,
                 source_item_type: entity_record_attach_def_type(db, record),
                 source_owner_resolved: true,
+                source_kiosk_interaction: entity_record_has_kiosk_interaction(db, record),
             });
         }
     }
@@ -874,6 +881,7 @@ pub(crate) fn ui_binding_for_record(db: &Database, record: &Record) -> Option<Ui
         ui_screen_aspect_w_over_h: None,
         source_item_type: entity_record_attach_def_type(db, record),
         source_owner_resolved: true,
+        source_kiosk_interaction: entity_record_has_kiosk_interaction(db, record),
     })
 }
 
