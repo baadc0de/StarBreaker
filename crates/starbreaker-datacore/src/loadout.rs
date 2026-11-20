@@ -1134,6 +1134,50 @@ mod tests {
         assert!(!should_use_unclaimed_sub_geometry_fallback(None, 0));
     }
 
+    fn live_index(test: impl FnOnce(&EntityIndex)) {
+        let Ok(found) = starbreaker_common::discover::find_p4k() else {
+            eprintln!("skipping: no Data.p4k installed");
+            return;
+        };
+        let p4k = starbreaker_p4k::MappedP4k::open(found.path).unwrap();
+        let dcb = p4k.read_file("Data\\Game2.dcb").or_else(|_| p4k.read_file("Data\\Game.dcb")).unwrap();
+        let db = Database::from_bytes(&dcb).unwrap();
+        test(&EntityIndex::new(&db));
+    }
+
+    fn child<'n>(nodes: &'n [LoadoutNode], port: &str) -> &'n LoadoutNode {
+        nodes.iter().find(|n| n.item_port_name.eq_ignore_ascii_case(port)).unwrap_or_else(|| panic!("no {port}"))
+    }
+
+    /// scviewer C2 fixes review, LIVE 4.10.2: an entity-reference entry's nested loadout fills a port its item's class
+    /// default also fills (the Aquila GS's upper turret base, `hardpoint_addon_mesh`): the parent's entry wins, the
+    /// class default adds no second occupant; the class default still fills the ports the nested loadout leaves free
+    /// (the PDC turret's missile ports).
+    #[test]
+    fn live_a_nested_loadout_overrides_its_items_class_default_port_by_port() {
+        live_index(|idx| {
+            let tree = resolve_loadout_indexed(idx, idx.find_record("RSI_Constellation_Aquila_GS").unwrap());
+            let base = child(&tree.root.children, "hardpoint_turret_base_upper");
+            let occupants = base.children.iter().filter(|c| c.item_port_name.eq_ignore_ascii_case("hardpoint_addon_mesh")).count();
+            assert_eq!(occupants, 1, "{:?}", base.children.iter().map(|c| (&c.item_port_name, &c.entity_name)).collect::<Vec<_>>());
+
+            let tree = resolve_loadout_indexed(idx, idx.find_record("Turret_PDC_BEHR_M").unwrap());
+            let centre = child(&tree.root.children, "turret_centre");
+            assert!(centre.children.iter().any(|c| c.item_port_name.eq_ignore_ascii_case("missile_01_attach")), "class default kept");
+        });
+    }
+
+    /// scviewer C2 fixes review, LIVE 4.10.2: an entry whose nested loadout is an XML file (the GRIN MDC's
+    /// `hardpoint_GRIN_MXC_Door`) records that file for the exporter.
+    #[test]
+    fn live_a_nested_xml_loadout_names_its_file() {
+        live_index(|idx| {
+            let tree = resolve_loadout_indexed(idx, idx.find_record("GRIN_MDC").unwrap());
+            let door = child(&tree.root.children, "hardpoint_GRIN_MXC_Door");
+            assert!(door.loadout_xml_path.as_deref().is_some_and(|p| p.to_ascii_lowercase().ends_with(".xml")), "{:?}", door.loadout_xml_path);
+        });
+    }
+
     /// LIVE 4.10.2: the fire extinguisher in a C2 cabinet carries its magazine (`kegr_fire_extinguisher_01_mag`), whose
     /// only geometry is two situational SubGeometry variants (`tableDisplay`, `empty`) its port's tags do not select:
     /// it places no mesh (skipped without a Data.p4k).
@@ -1172,6 +1216,34 @@ fn extract_loadout_from_value<'v, 'a>(entity_val: &'v Value<'a>) -> Option<&'v V
     None
 }
 
+/// The children an entry attaches below its item: its own nested loadout's (`nested`, already walked into
+/// `children`), then the item class's default loadout (`defaults`, walked from the class) on the ports the nested
+/// loadout does not author — an entry overrides its item's defaults port by port, an authored empty port staying empty.
+/// A nested loadout given by an XML file replaces the defaults whole (its ports are known only once the exporter reads
+/// it). Returns the XML file to read: the nested loadout's, else the class's when the entry nests none.
+fn merge_class_default(
+    children: &mut Vec<LoadoutNode>,
+    nested: Option<&Value>,
+    defaults: Vec<LoadoutNode>,
+    class_xml_path: Option<String>,
+) -> Option<String> {
+    let Some(nested) = nested else {
+        children.extend(defaults);
+        return class_xml_path;
+    };
+    if let Some(path) = loadout_xml_path(nested) {
+        return Some(path);
+    }
+    let authored: HashSet<String> = get_array_field(nested, "entries")
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| get_string_field(entry, "itemPortName"))
+        .map(str::to_ascii_lowercase)
+        .collect();
+    children.extend(defaults.into_iter().filter(|node| !authored.contains(&node.item_port_name.to_ascii_lowercase())));
+    None
+}
+
 /// Walk a loadout Value tree recursively, collecting LoadoutNodes.
 /// The `loadout_value` is a SItemPortLoadoutManualParams with an `entries` array.
 /// Each entry may have its own nested `loadout` field, and may reference child
@@ -1207,12 +1279,11 @@ fn collect_entries_recursive(
         if !class_name.is_empty() {
             // Path A: entityClassName — O(1) lookup via EntityIndex
             let child = if let Some(child_record) = idx.find_record(class_name) {
-                // An entry without a nested loadout leaves the class's own default loadout (as an entity reference's
-                // does, Paths B/C): its entries, or the XML file it names for the exporter to read.
-                let loadout_xml_path = match nested {
-                    Some(_) => None,
-                    None => class_default_loadout(idx, child_record, &mut grandchildren, depth + 1),
-                };
+                // The class's own default loadout fills the ports the entry's nested loadout leaves free (as for an
+                // entity reference, Paths B/C): its entries, or the XML file it names for the exporter to read.
+                let mut defaults = Vec::new();
+                let class_xml = class_default_loadout(idx, child_record, &mut defaults, depth + 1);
+                let loadout_xml_path = merge_class_default(&mut grandchildren, nested, defaults, class_xml);
                 let (child_geom, child_mtl) = idx.query_geometry_paths(child_record);
                 let has_geom = child_geom.is_some();
                 log::debug!(
@@ -1251,11 +1322,13 @@ fn collect_entries_recursive(
             let mut ref_mtl = extract_material_from_value(ref_val);
 
             // Also walk the referenced entity's own loadout for further children
-            let mut loadout_xml_path = None;
+            let mut defaults = Vec::new();
+            let mut class_xml = None;
             if let Some(ref_loadout) = extract_loadout_from_value(ref_val) {
-                collect_entries_recursive(idx, ref_loadout, &mut grandchildren, depth + 1);
-                loadout_xml_path = nested.is_none().then(|| self::loadout_xml_path(ref_loadout)).flatten();
+                collect_entries_recursive(idx, ref_loadout, &mut defaults, depth + 1);
+                class_xml = self::loadout_xml_path(ref_loadout);
             }
+            let loadout_xml_path = merge_class_default(&mut grandchildren, nested, defaults, class_xml);
 
             // Resolve the entity record. Prefer the record_id stamped by the
             // materializer (always correct), fall back to className name lookup.
@@ -1362,8 +1435,9 @@ fn collect_entries_recursive(
 
                 // Also resolve the referenced entity's OWN loadout for nested children.
                 // Each child entity's loadout is small, so this Value query is cheap.
-                let own_xml_path = class_default_loadout(idx, ref_record, &mut grandchildren, depth + 1);
-                let loadout_xml_path = nested.is_none().then_some(own_xml_path).flatten();
+                let mut defaults = Vec::new();
+                let class_xml = class_default_loadout(idx, ref_record, &mut defaults, depth + 1);
+                let loadout_xml_path = merge_class_default(&mut grandchildren, nested, defaults, class_xml);
 
                 let has_geom = ref_geom.is_some();
                 log::debug!(

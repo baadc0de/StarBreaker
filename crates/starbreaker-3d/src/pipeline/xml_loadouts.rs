@@ -6,8 +6,8 @@
 //!
 //! - [`expand_xml_loadouts`]: fills the children of every node (recursively) that has a loadout file and no
 //!   children.
-//! - [`expanded_children`]: a loadout tree's root children with their XML loadouts expanded (borrowed unchanged when
-//!   the tree names no file).
+//! - [`expanded_children`]: a loadout tree's root children with their XML loadouts expanded, the root's own file
+//!   included (borrowed unchanged when the tree names no file).
 //! - [`manual_entries`]: the file's items as manual loadout entries (pure).
 
 use std::borrow::Cow;
@@ -75,15 +75,17 @@ pub(crate) fn expand_xml_loadouts(idx: &EntityIndex, p4k: &MappedP4k, nodes: &mu
     }
 }
 
-/// `tree`'s root children with every loadout file expanded; borrowed unchanged when none is named.
+/// `tree`'s root children with every loadout file expanded, the root's own included (an entity exported alone whose
+/// default loadout is a file); borrowed unchanged when none is named.
 pub(crate) fn expanded_children<'t>(db: &Database, p4k: &MappedP4k, tree: &'t LoadoutTree) -> Cow<'t, [LoadoutNode]> {
-    if !names_xml_loadout(&tree.root.children) {
+    if !names_xml_loadout(std::slice::from_ref(&tree.root)) {
         return Cow::Borrowed(&tree.root.children);
     }
     let idx = EntityIndex::new(db);
-    let mut children = tree.root.children.clone();
-    expand_xml_loadouts(&idx, p4k, &mut children, 0);
-    Cow::Owned(children)
+    let mut root = [tree.root.clone()];
+    expand_xml_loadouts(&idx, p4k, &mut root, 0);
+    let [root] = root;
+    Cow::Owned(root.children)
 }
 
 #[cfg(test)]
@@ -160,5 +162,14 @@ mod tests {
             }
         }
         no_port_twice(&children, "CRUS_Starlifter_C2");
+
+        // Exported alone, the hatch is the root: its own loadout file still gives its panels (review fix).
+        let hatch = starbreaker_datacore::loadout::resolve_loadout_indexed(
+            &idx,
+            idx.find_record("Door_Ship_Exterior_CRUS_Starlifter_Door_Bottom").unwrap(),
+        );
+        let root_children = expanded_children(&db, &p4k, &hatch);
+        let ports: Vec<&str> = root_children.iter().map(|c| c.item_port_name.as_str()).collect();
+        assert_eq!(ports, ["IP_Interior", "IP_Exterior"]);
     }
 }

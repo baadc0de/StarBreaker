@@ -179,8 +179,14 @@ itemName>`, nested `<Items>` as the item's own loadout) and attaches its items
 at the class's item ports exactly as a manual loadout
 (`pipeline/xml_loadouts.rs`). A loadout entry naming its class by
 `entityClassName` with no nested `loadout` takes the class's own default
-loadout (as an `entityClassReference` entry always did); an entry that nests a
-loadout keeps only that one. The C2's front bottom hatch thus carries
+loadout (as an `entityClassReference` entry always did). An entry that nests a
+loadout overrides its item's class default port by port, for both kinds of
+entry: the nested entries fill their ports (an authored empty port stays
+empty) and the class default fills only the ports they leave free, so no port
+gets two occupants (the Aquila GS's upper turret base listed `Screen_Radar`
+and `hardpoint_addon_mesh` twice before). A nested loadout given by an XML file
+is read instead of the class default. An entity exported alone whose own
+default loadout is an XML file gets its items as root children. The C2's front bottom hatch thus carries
 `ControlPanel_Screen_DoorControl_Starlifter_Interior_Button` on `IP_Interior`
 and `ControlPanel_Screen_DoorControl_Starlifter_Exterior_Button` on
 `IP_Exterior`, as children with `parent_entity_name` the hatch, like the rear
