@@ -266,3 +266,21 @@ pub fn convolution_share_set(id: u32, ir: u32) -> HircEntry {
     d.extend_from_slice(&0u16.to_le_bytes()); // state property values
     HircEntry { type_id: 16, object_id: id, data: d }
 }
+
+/// A Wwise Peak Limiter share set (type 16): threshold, ratio, look-ahead, release, output level, process LFE, channel link.
+pub fn peak_limiter_share_set(id: u32, threshold_db: f32, ratio: f32, look_ahead_s: f32, release_s: f32, output_db: f32) -> HircEntry {
+    let mut d = Vec::new();
+    d.extend_from_slice(&0x006E_0003u32.to_le_bytes());
+    let mut params = Vec::new();
+    for v in [threshold_db, ratio, look_ahead_s, release_s, output_db] {
+        params.extend_from_slice(&v.to_le_bytes());
+    }
+    params.extend_from_slice(&[1, 1]);
+    d.extend_from_slice(&(params.len() as u32).to_le_bytes());
+    d.extend(params);
+    d.push(0); // no media
+    d.extend_from_slice(&0u16.to_le_bytes()); // rtpc
+    d.extend_from_slice(&[0, 0]); // state chunk
+    d.extend_from_slice(&0u16.to_le_bytes()); // state property values
+    HircEntry { type_id: 16, object_id: id, data: d }
+}

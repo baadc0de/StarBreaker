@@ -1659,7 +1659,7 @@ Recognised by DataCore component type (`AudioTriggerSpotParams`, `AudioAreaAmbie
                               "hpf", "spread", "focus" } },          // each { scaling, points: [[x, y, interp]] }
   "buses": { "<id>": { "name", "parent", "aux", "voice_volume_db", "bus_volume_db", "make_up_gain_db", "rtpc",
                        "rtpc_default_db", "rtpc_without_default", "state_groups",
-                       "effects": [ { "slot", "id", "plugin", "kind", "convolution", "ir_media", "gain_db", "eq" } ] } },
+                       "effects": [ { "slot", "id", "plugin", "kind", "convolution", "ir_media", "gain_db", "eq", "limiter" } ] } },
   "media": { "<id>": { "file": "Audio/<id>.ogg", "codec", "channels", "rate", "seconds", "source", "error" } },
   "rtpcs": { "<ATL RTPC>": { "wwise_name", "min", "max", "default", "wwise_default" } },   // ATL / Init.bnk STMG defaults
   "environments": { "<ATL environment>": { "aux_bus", "record", "size": [min, max], "interiority": [min, max],
@@ -1692,6 +1692,8 @@ Rules a player follows (all values are the game's; nothing is chosen per asset):
   environment's aux bus runs a Wwise Convolution Reverb (`buses[].effects[].convolution`: wet, dry, pre-delay) over
   `impulse_response` (interleaved little-endian `f32`, time domain, rebuilt from the plugin's partitioned bfloat16
   spectra; `starbreaker_wwise::convolution` documents the layout).
+- **Limiter.** A bus's Wwise Peak Limiter (`buses[].effects[].limiter`: `threshold_db`, `ratio`, `look_ahead_s`,
+  `release_s`, `output_level_db`, `process_lfe`, `channel_link`; the master bus carries one) limits that bus's mix.
 - **Rooms.** `rooms[].environment` is the room class's `AudioPropagationParams.audioEnvironment` when set; else the
   `AudioEnvironment` record whose `interiority` range holds the class's `physicalEncapsulationValue` and whose `size`
   range holds `size_m` = cube root of the room's volume (the nearest range when between ranges). The size metric is
@@ -1699,6 +1701,6 @@ Rules a player follows (all values are the game's; nothing is chosen per asset):
 
 Open items (not derivable from the data; not applied): the shapes of the non-linear curve interpolations
 (`mix::evaluate` documents the forms used), the mapping of Wwise LPF/HPF amounts (0..100) to cut-off frequencies,
-spread and focus, bus EQ / compressor / limiter / meter effects, ducking, state groups (the game sets states at run
+spread and focus, bus EQ / compressor / meter effects, ducking, state groups (the game sets states at run
 time), LFO modulators, switch values other than the default, and the two zero words at offset 40 of an
 impulse-response header.

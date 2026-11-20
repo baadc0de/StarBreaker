@@ -50,3 +50,16 @@ fn db_scaled_curve_values_are_linear_gain_minus_one() {
     assert_eq!(to_db(2, -1.0), -200.0);
     assert_eq!(to_db(0, -12.0), -12.0);
 }
+
+#[test]
+fn a_peak_limiter_slot_carries_its_parameters() {
+    let objects = vec![bus(1, 0, false, &[], Some(60), None), peak_limiter_share_set(60, -1.5, 20.0, 0.01, 0.25, -0.5)];
+    let lib = library(atl(&[], &[]), vec![("Init.bnk", objects, Vec::new())]);
+    let r = crate::playable::Resolver::new(&lib);
+    let chain = bus_chain(&r, 1);
+    let fx = &chain[0].1.effects[0];
+    assert_eq!(fx.kind, "peak_limiter");
+    let l = fx.limiter.as_ref().expect("limiter parameters");
+    assert_eq!((l.threshold_db, l.ratio, l.look_ahead_s, l.release_s, l.output_level_db), (-1.5, 20.0, 0.01, 0.25, -0.5));
+    assert!(l.process_lfe && l.channel_link);
+}

@@ -2,7 +2,8 @@
 //!
 //! - [`bus_chain`] / [`BusOut`]: a bus, its parent, its own voice volume (`Volume`, applied to each voice routed
 //!   through it), bus volume (`BusVolume`, applied to the bus mix), make-up gain, RTPC curves (and their value at the
-//!   RTPCs' ATL defaults) and effect slots (a Convolution Reverb slot carries its parameters and IR media id).
+//!   RTPCs' ATL defaults) and effect slots (a Convolution Reverb slot carries its parameters and IR media id; Gain, Parametric EQ and
+//!   Peak Limiter slots their parameters).
 //! - [`AttenuationOut`]: the curves of an attenuation object by slot.
 //! - [`evaluate`]: a Wwise curve at `x` (linear and constant interpolation exactly; the other named shapes by their
 //!   documented forms, see the function).
@@ -84,6 +85,37 @@ pub struct EffectOut {
     /// Wwise Parametric EQ (v154: three bands and an output level).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub eq: Option<ParametricEq>,
+    /// Wwise Peak Limiter (`CAkPeakLimiterFXParams`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limiter: Option<PeakLimiter>,
+}
+
+/// A Wwise Peak Limiter (`CAkPeakLimiterFXParams`: threshold dB, ratio, look-ahead s, release s, output level dB,
+/// process LFE, channel link).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct PeakLimiter {
+    pub threshold_db: f32,
+    pub ratio: f32,
+    pub look_ahead_s: f32,
+    pub release_s: f32,
+    pub output_level_db: f32,
+    pub process_lfe: bool,
+    pub channel_link: bool,
+}
+
+impl PeakLimiter {
+    pub fn parse(b: &[u8]) -> Option<Self> {
+        let f = |o: usize| b.get(o..o + 4).map(|x| f32::from_le_bytes(x.try_into().unwrap()));
+        Some(Self {
+            threshold_db: f(0)?,
+            ratio: f(4)?,
+            look_ahead_s: f(8)?,
+            release_s: f(12)?,
+            output_level_db: f(16)?,
+            process_lfe: *b.get(20)? != 0,
+            channel_link: *b.get(21)? != 0,
+        })
+    }
 }
 
 /// A Wwise Parametric EQ (`CAkParameterEQFXParams`, three bands in v154).
@@ -215,6 +247,7 @@ pub fn bus_chain(resolver: &Resolver<'_, '_>, bus: u32) -> Vec<(u32, BusOut)> {
                     ir_media: None,
                     gain_db: None,
                     eq: None,
+                    limiter: None,
                 };
                 if let Some(HircObject::FxShareSet(f) | HircObject::FxCustom(f)) = resolver.lib.object(&banks, fx.fx_id) {
                     out.plugin = format!("{:#010x}", f.fx_id);
@@ -227,6 +260,7 @@ pub fn bus_chain(resolver: &Resolver<'_, '_>, bus: u32) -> Vec<(u32, BusOut)> {
                         }
                         0x008B_0003 => out.gain_db = params.get(0..4).map(|b| f32::from_le_bytes(b.try_into().unwrap())),
                         0x0069_0003 => out.eq = ParametricEq::parse(params),
+                        0x006E_0003 => out.limiter = PeakLimiter::parse(params),
                         _ => {}
                     }
                 }
