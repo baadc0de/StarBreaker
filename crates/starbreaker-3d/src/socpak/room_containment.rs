@@ -108,6 +108,7 @@ mod tests {
         RoomVolume {
             room_guid: "room".into(),
             room_name: None,
+            room_class_guid: None,
             source_entity: "soup".into(),
             transform: glam::Mat4::IDENTITY.to_cols_array_2d(),
             shape: RoomVolumeShape::Trimesh {

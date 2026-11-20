@@ -37,6 +37,7 @@ mod entity_tests;
 mod lift_tests;
 mod room_containment;
 pub(crate) mod room_volume;
+pub(crate) mod audio_entities;
 #[path = "socpak_light_fields.rs"]
 pub(crate) mod light_fields;
 
@@ -257,6 +258,7 @@ pub fn load_interior_from_socpak(
     let mut meshes = Vec::new();
     let mut lights = Vec::new();
     let mut room_volumes = Vec::new();
+    let mut audio = audio_entities::InteriorAudio::default();
     let mut tint_palette_names = Vec::new();
 
     for soc_entry in &soc_entries {
@@ -295,6 +297,7 @@ pub fn load_interior_from_socpak(
                         .into_iter()
                         .map(|volume| volume.transformed(non_item_port_transform_delta)),
                 );
+                audio.extend(payload.audio, non_item_port_transform_delta);
                 if tint_palette_names.is_empty() {
                     tint_palette_names = palette_names;
                 }
@@ -321,6 +324,7 @@ pub fn load_interior_from_socpak(
         meshes,
         lights,
         room_volumes,
+        audio,
         container_transform,
         tint_palette_names,
     })
@@ -749,6 +753,7 @@ fn parse_soc(
     let mut meshes = Vec::new();
     let mut lights = Vec::new();
     let mut room_volumes = Vec::new();
+    let mut audio = audio_entities::InteriorAudio::default();
     let mut palette_names = Vec::new();
 
     for chunk in crch_file.chunks() {
@@ -770,6 +775,8 @@ fn parse_soc(
                     meshes.extend(entity_meshes);
                     lights.extend(entity_lights);
                     room_volumes.extend(room_volume::extract_room_volumes(&xml, room_guids));
+                    let (spots, areas, untriggered) = audio_entities::extract_audio_entities(&xml);
+                    audio.extend(audio_entities::InteriorAudio { spots, areas, untriggered }, glam::Mat4::IDENTITY.to_cols_array_2d());
                 }
                 Err(e) => log::warn!("failed to parse CryXMLB in {name}: {e}"),
             },
@@ -784,6 +791,7 @@ fn parse_soc(
         meshes,
         lights,
         room_volumes,
+        audio,
         container_transform,
         tint_palette_names: Vec::new(), // Set by caller from palette_names
     }, palette_names))

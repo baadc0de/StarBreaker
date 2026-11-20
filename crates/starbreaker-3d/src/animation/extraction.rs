@@ -115,12 +115,21 @@ pub(crate) fn extract_skeleton_json(
     // A per-bone blend-mode classifier (additive vs override) was tried here and deferred: no
     // data-grounded discriminator is known. `BoneBlendMode`, `classify_bone_blend_modes` and
     // `annotate_animations_json_with_blend_modes` remain for a future one.
+    // The CAF each clip plays: an event's resolved path, or a database-only entry's own name.
+    let caf_paths: Vec<String> = paired
+        .iter()
+        .map(|p| match p.origin {
+            ClipOrigin::DatabaseOnly => p.clip.name.clone(),
+            _ => chrparams.animations.get(&p.clip.name).cloned().unwrap_or_default(),
+        })
+        .collect();
     let (clips, origins): (Vec<_>, Vec<_>) = paired
         .into_iter()
         .map(|paired| (paired.clip, paired.origin))
         .unzip();
     let mut value = database_to_animations_json(&AnimationDatabase { clips });
     annotate_animation_json_source(&mut value, skeleton_path, &skeleton_bone_name_by_hash);
+    attach_audio_events(p4k, &chrparams, &mut value, &caf_paths);
     if endpoints {
         for (clip, origin) in value.as_array_mut().into_iter().flatten().zip(origins) {
             clip["catalogue_source"] = serde_json::json!(match origin {
@@ -135,6 +144,38 @@ pub(crate) fn extract_skeleton_json(
         }
     }
     Ok(Some(value))
+}
+
+/// Put each clip's audio events (`audio_events[]`, from the rig's `$AnimEventDatabase`, keyed by the clip's CAF) on
+/// the clip; [`super::rig_sources`] copies them onto the clip's source record.
+fn attach_audio_events(
+    p4k: &starbreaker_p4k::MappedP4k,
+    chrparams: &crate::chrparams::ChrParams,
+    value: &mut serde_json::Value,
+    caf_paths: &[String],
+) {
+    let Some(db_path) = chrparams.anim_event_database.as_deref() else { return };
+    let Some(data) = p4k
+        .entry_case_insensitive(&crate::pipeline::datacore_path_to_p4k(db_path))
+        .and_then(|e| p4k.read(e).ok())
+    else {
+        log::debug!("[anim] animevents {db_path} not in the archive");
+        return;
+    };
+    let events = match crate::animevents::parse_animevents(&data) {
+        Ok(events) => events,
+        Err(error) => {
+            log::warn!("[anim] {db_path}: {error}");
+            return;
+        }
+    };
+    for (clip, caf) in value.as_array_mut().into_iter().flatten().zip(caf_paths) {
+        let Some(list) = events.get(&crate::animevents::animation_key(caf)) else { continue };
+        let audio = crate::animevents::audio_events(list);
+        if !audio.is_empty() {
+            clip["audio_events"] = serde_json::to_value(audio).unwrap_or_default();
+        }
+    }
 }
 
 /// The tracks database (.dba) a rig's chrparams declares. It holds the rig's CAFs; a rig that

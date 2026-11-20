@@ -41,6 +41,7 @@ fn container(parent_node_name: Option<&str>) -> LoadedInteriors {
             placements: Vec::new(),
             lights: crate::socpak::lights_from_soc_xml(LIGHT_SOC),
             room_volumes: Vec::new(),
+            audio: Default::default(),
             palette: None,
             proximity_sensors: Vec::new(),
             entities: Vec::new(),

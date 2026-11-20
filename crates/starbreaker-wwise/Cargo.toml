@@ -13,5 +13,8 @@ quick-xml = { workspace = true }
 zerocopy = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
+log = { workspace = true }
+rayon = { workspace = true }
 
 [dev-dependencies]
+serde_json = { workspace = true }

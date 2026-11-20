@@ -46,6 +46,9 @@ pub struct RoomVolume {
     pub room_guid: String,
     /// Authored name of the room entity when it lives in the same `.soc`. Label only.
     pub room_name: Option<String>,
+    /// `EntityClassGUID` of the room entity when it lives in the same `.soc` (lower case): its class carries the
+    /// room's `AudioPropagationParams` (WP-A1 reverb).
+    pub room_class_guid: Option<String>,
     /// Authored name of the entity carrying the `AreaComponent`. Label only.
     pub source_entity: String,
     /// 4×4 column-major transform: segment space → container-local space.
@@ -67,6 +70,7 @@ impl RoomVolume {
         let mut value = serde_json::json!({
             "room": self.room_guid,
             "room_name": self.room_name,
+            "room_class": self.room_class_guid,
             "source": self.source_entity,
             "transform": self.transform,
         });
@@ -159,11 +163,15 @@ pub(crate) fn extract_room_volumes(xml: &CryXml, rooms: &HashSet<String>) -> Vec
     };
 
     let mut room_names: HashMap<String, &str> = HashMap::new();
+    let mut room_classes: HashMap<String, String> = HashMap::new();
     for entity in &entities {
         let attrs: HashMap<&str, &str> = xml.node_attributes(entity).collect();
         if let (Some(guid), Some(name)) = (attrs.get("EntityCryGUID"), attrs.get("Name")) {
             let guid = guid.to_ascii_lowercase();
             if rooms.contains(&guid) {
+                if let Some(class) = attrs.get("EntityClassGUID") {
+                    room_classes.insert(guid.clone(), class.to_ascii_lowercase());
+                }
                 room_names.insert(guid, name);
             }
         }
@@ -219,6 +227,7 @@ pub(crate) fn extract_room_volumes(xml: &CryXml, rooms: &HashSet<String>) -> Vec
                 parse_segment_transform(segment_attrs.get("transform_ls").copied().unwrap_or(""));
             volumes.push(RoomVolume {
                 room_name: room_names.get(&room_guid).map(|name| name.to_string()),
+                room_class_guid: room_classes.get(&room_guid).cloned(),
                 room_guid: room_guid.clone(),
                 source_entity: source_entity.clone(),
                 transform: (entity_transform * segment_transform).to_cols_array_2d(),

@@ -1387,6 +1387,8 @@ pub struct InteriorPayload {
     /// Room extents (area shapes linked to the container's registered rooms),
     /// in the same container-local space as `lights`.
     pub room_volumes: Vec<crate::socpak::room_volume::RoomVolume>,
+    /// Placed audio: trigger spots and area ambiences (WP-A1), container-local like `lights`.
+    pub audio: crate::socpak::audio_entities::InteriorAudio,
     /// 4×4 column-major transform for this container relative to hull.
     pub container_transform: [[f32; 4]; 4],
     /// Tint palette record names from IncludedObjects (e.g. "rsi_interior_zeus_base").

@@ -84,7 +84,7 @@ pub(crate) fn read_source_clips(
 /// start pose. Two rigs sharing a skeleton and animation give equal records, and so one source.
 fn source_record(source: &RigSource, clip: &Value) -> Value {
     let mut record = serde_json::json!({ "skeleton_path": source.skeleton_path });
-    for key in ["fps", "frame_count", "start_rotation", "start_position"] {
+    for key in ["fps", "frame_count", "start_rotation", "start_position", "audio_events"] {
         if let Some(value) = clip.get(key) {
             record[key] = value.clone();
         }

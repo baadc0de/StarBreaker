@@ -1,6 +1,7 @@
 //! Geometry parsing, clip catalogues and public StarBreaker export entry points.
 pub mod dequant;
 pub(crate) mod decomposed;
+pub(crate) mod decomposed_audio;
 pub(crate) mod decomposed_physics;
 pub(crate) mod physics_class;
 pub(crate) mod physics_grid;
@@ -24,6 +25,7 @@ pub mod types;
 pub mod animation;
 pub mod character;
 pub mod chrparams;
+pub mod animevents;
 pub mod riglogic;
 pub mod validation;
 pub mod ui_pipeline;

@@ -1,4 +1,15 @@
+//! Wwise soundbanks, the game's ATL trigger dictionary, DataCore audio references, and the playable-tree / package
+//! audio model built from them (`library`, `playable`, `mix`, `manifest`, `convolution`).
+
 pub mod atl;
+pub mod convolution;
+pub mod library;
+pub mod playable;
+pub mod mix;
+pub mod manifest;
+pub mod datacore_effects;
+#[cfg(test)]
+mod hirc_fixture;
 pub mod bkhd;
 pub mod bnk;
 pub mod datacore_audio;

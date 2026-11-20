@@ -1,3 +1,11 @@
+//! Audio and auxiliary buses (HIRC types 8 and 18) and effect share sets / custom effects (16, 17), bank version 154.
+//!
+//! Bus layout (wwiser `CAkBus::SetInitialValues`, v146+): `OverrideBusId` (+ `idDeviceShareset` when 0), the bus
+//! initial params (props, positioning, aux params, a behaviour bit vector, `u16` max instances, `u32` channel config,
+//! the HDR bit vector), recovery time, max duck volume, ducks, the effect slots (`u8` count; when set a bypass byte
+//! and `u8 index, u32 id, u8 bits` per slot), the metadata slots (`u8` count, `u8 index, u32 id, u8 share set`), the
+//! initial RTPC list and the state chunk.
+
 use serde::Serialize;
 use starbreaker_common::{ParseError, SpanReader};
 
@@ -30,6 +38,13 @@ pub struct AudioBus {
     pub properties: AkPropBundle,
     pub positioning: PositioningParams,
     pub aux_params: AuxParams,
+    /// bKillNewest, bUseVirtualBehavior, bIsMaxNumInstIgnoreParent, bIsBackgroundMusic.
+    pub behaviour_bits: u8,
+    pub max_num_instance: u16,
+    /// `AkChannelConfig`: channel count (bits 0–7), config type (8–11), channel mask (12–31).
+    pub channel_config: u32,
+    /// bIsHdrBus, bHdrReleaseModeExponential.
+    pub hdr_bits: u8,
     pub recovery_time: i32,
     pub max_duck_volume: f32,
     pub ducks: Vec<DuckEntry>,
@@ -52,6 +67,10 @@ impl AudioBus {
         let properties = AkPropBundle::parse(reader)?;
         let positioning = PositioningParams::parse(reader)?;
         let aux_params = AuxParams::parse(reader)?;
+        let behaviour_bits = reader.read_u8()?;
+        let max_num_instance = reader.read_u16()?;
+        let channel_config = reader.read_u32()?;
+        let hdr_bits = reader.read_u8()?;
 
         let recovery_time = reader.read_i32()?;
         let max_duck_volume = reader.read_f32()?;
@@ -70,7 +89,7 @@ impl AudioBus {
         }
 
         // BusInitialFxParams (same structure as NodeInitialFxParams but without
-        // the override parent byte — we parse it manually)
+        // the override parent byte â€” we parse it manually)
         let num_fx = reader.read_u8()? as usize;
         let mut bypass_all = false;
         let mut fx_list = Vec::with_capacity(num_fx);
@@ -90,7 +109,17 @@ impl AudioBus {
             bypass_all,
         };
 
-        let metadata_params = NodeInitialMetadataParams::parse(reader)?;
+        // Bus metadata slots carry no override-parent byte (`CAkBus::SetInitialMetadataParams`).
+        let num_metadata = reader.read_u8()? as usize;
+        let mut entries = Vec::with_capacity(num_metadata);
+        for _ in 0..num_metadata {
+            entries.push(super::node_base::MetadataEntry {
+                fx_index: reader.read_u8()?,
+                fx_id: reader.read_u32()?,
+                is_share_set: reader.read_u8()? != 0,
+            });
+        }
+        let metadata_params = NodeInitialMetadataParams { is_override_parent: false, entries };
 
         let rtpc = InitialRtpc::parse(reader)?;
         let state_chunk = StateChunk::parse(reader)?;
@@ -102,6 +131,10 @@ impl AudioBus {
             properties,
             positioning,
             aux_params,
+            behaviour_bits,
+            max_num_instance,
+            channel_config,
+            hdr_bits,
             recovery_time,
             max_duck_volume,
             ducks,
@@ -110,6 +143,18 @@ impl AudioBus {
             rtpc,
             state_chunk,
         })
+    }
+}
+
+impl AudioBus {
+    /// An own property (`AkPropID`, v154 table in [`super::props::prop_id`]) as `f32`.
+    pub fn prop(&self, id: u8) -> Option<f32> {
+        self.properties.props.iter().find(|p| p.id == id).map(|p| p.as_f32())
+    }
+
+    /// The parent bus (none for a master bus).
+    pub fn parent(&self) -> Option<u32> {
+        (self.override_bus_id != 0).then_some(self.override_bus_id)
     }
 }
 
@@ -181,3 +226,7 @@ impl FxBase {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "bus_tests.rs"]
+mod tests;

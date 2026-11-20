@@ -264,6 +264,8 @@ pub enum ExportedFileKind {
     MaterialSidecar,
     MeshAsset,
     TextureAsset,
+    /// Decoded game audio (`Audio/<media>.ogg`, `Audio/ir/<media>.f32`), shared like mesh and texture assets.
+    AudioAsset,
 }
 
 impl ExportedFileKind {
@@ -274,7 +276,7 @@ impl ExportedFileKind {
     pub fn is_reusable_asset(self) -> bool {
         matches!(
             self,
-            Self::MeshAsset | Self::MaterialSidecar | Self::TextureAsset
+            Self::MeshAsset | Self::MaterialSidecar | Self::TextureAsset | Self::AudioAsset
         )
     }
 }

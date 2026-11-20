@@ -591,6 +591,9 @@ struct InteriorContainerRecord {
     placements: Vec<InteriorPlacementRecord>,
     lights: Vec<serde_json::Value>,
     room_volumes: Vec<serde_json::Value>,
+    /// Placed audio (WP-A1): `audio_spots[]` / `audio_areas[]` with class defaults resolved.
+    audio_spots: Vec<serde_json::Value>,
+    audio_areas: Vec<serde_json::Value>,
     proximity_sensors: Vec<serde_json::Value>,
     inventory_containers: Vec<serde_json::Value>,
     /// Geometry-less interactive entities (WP-P5).
@@ -1683,6 +1686,7 @@ pub(crate) fn write_decomposed_export(
         &input.entity_name, &light_rigs, &light_ports, &input.interiors);
     let mut entity_light_records: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
     let mut interior_records = Vec::with_capacity(input.interiors.containers.len());
+    let mut audio_classes = crate::decomposed_audio::AudioClasses::default();
     let mut interior_placement_elapsed = std::time::Duration::ZERO;
     let mut interior_asset_resolve_elapsed = std::time::Duration::ZERO;
     let mut interior_ui_binding_elapsed = std::time::Duration::ZERO;
@@ -2100,6 +2104,8 @@ pub(crate) fn write_decomposed_export(
             placements,
             lights,
             room_volumes: container.room_volumes.iter().map(|volume| volume.to_json()).collect(),
+            audio_spots: audio_classes.spots_json(db, &container.audio),
+            audio_areas: audio_classes.areas_json(db, &container.audio),
             proximity_sensors: container.proximity_sensors.iter().map(|sensor| sensor.to_json()).collect(),
             inventory_containers: container.inventory_containers.iter().map(|c| c.to_json()).collect(),
             entities: container.entities.iter().map(|e| e.to_json()).collect(),
@@ -2317,6 +2323,9 @@ pub(crate) fn write_decomposed_export(
     log::info!("[timing][decomposed] manifests: {:.2}s", phase_start.elapsed().as_secs_f32());
     log::info!("[timing][decomposed] total: {:.2}s", total_start.elapsed().as_secs_f32());
 
+    // WP-A1: the package's audio manifest and media, from the finished scene and clips.
+    crate::decomposed_audio::add_package_audio(db, p4k, &mut files, &package_name);
+
     Ok(DecomposedExport {
         files: files
             .into_files()
@@ -2337,6 +2346,8 @@ fn classify_exported_file_kind(relative_path: &str) -> ExportedFileKind {
         ExportedFileKind::MeshAsset
     } else if relative_path.ends_with(".png") || relative_path.ends_with(".dds") {
         ExportedFileKind::TextureAsset
+    } else if relative_path.starts_with(&format!("{}/", crate::decomposed_audio::AUDIO_DIR)) {
+        ExportedFileKind::AudioAsset
     } else {
         ExportedFileKind::PackageManifest
     }
@@ -2607,6 +2618,8 @@ fn interior_container_json(container: &InteriorContainerRecord) -> serde_json::V
         }).collect::<Vec<_>>(),
         "lights": container.lights,
         "room_volumes": container.room_volumes,
+        "audio_spots": container.audio_spots,
+        "audio_areas": container.audio_areas,
         "proximity_sensors": container.proximity_sensors,
         "inventory_containers": container.inventory_containers,
         "entities": container.entities,
@@ -8157,6 +8170,8 @@ mod tests {
             }],
             lights: vec![serde_json::json!({ "name": "light_a" })],
             room_volumes: vec![serde_json::json!({ "kind": "box" })],
+            audio_spots: Vec::new(),
+            audio_areas: Vec::new(),
             proximity_sensors: vec![serde_json::json!({ "entity_id": "sensor-id", "links": ["door-id"] })],
             inventory_containers: vec![serde_json::json!({ "entity_id": "grid-id" })],
             entities: Vec::new(),

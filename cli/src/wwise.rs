@@ -75,6 +75,16 @@ pub enum WwiseCommand {
         #[arg(long, env = "SC_DATA_P4K")]
         p4k: Option<PathBuf>,
     },
+    /// Resolve ATL triggers to their playable trees (containers, loops, own props, inherited bus / attenuation /
+    /// aux routing, attenuation curves, bus chains) as JSON
+    Playable {
+        /// Trigger names
+        #[arg(required = true)]
+        triggers: Vec<String>,
+        /// Path to Data.p4k
+        #[arg(long, env = "SC_DATA_P4K")]
+        p4k: Option<PathBuf>,
+    },
     /// Search for audio by trigger name or entity
     Search {
         /// Path to Data.p4k
@@ -108,6 +118,7 @@ impl WwiseCommand {
                 trigger,
                 entity,
             } => search(p4k.as_deref(), trigger, entity),
+            Self::Playable { triggers, p4k } => playable(&triggers, p4k.as_deref()),
         }
     }
 }
@@ -564,6 +575,37 @@ fn dump(input: &str, p4k_path: Option<&Path>) -> Result<()> {
 
     let json = serde_json::to_string_pretty(&objects)?;
     println!("{json}");
+    Ok(())
+}
+
+fn playable(triggers: &[String], p4k_path: Option<&Path>) -> Result<()> {
+    let p4k = load_p4k(p4k_path)?;
+    let lib = starbreaker_wwise::library::AudioLibrary::open(&p4k)?;
+    let mut resolver = starbreaker_wwise::playable::Resolver::new(&lib);
+    for t in triggers {
+        resolver.trigger(t);
+    }
+    let mut attenuations = serde_json::Map::new();
+    let init = lib.init_bank();
+    for (&id, home) in &resolver.out.attenuations {
+        let banks: Vec<_> = lib.bank(home).into_iter().chain(init.clone()).collect();
+        if let Some(starbreaker_wwise::HircObject::Attenuation(a)) = lib.object(&banks, id) {
+            attenuations.insert(id.to_string(), serde_json::to_value(starbreaker_wwise::mix::AttenuationOut::from_attenuation(a))?);
+        }
+    }
+    let mut buses = serde_json::Map::new();
+    for &bus in resolver.out.buses.keys() {
+        for (id, out) in starbreaker_wwise::mix::bus_chain(&resolver, bus) {
+            buses.insert(id.to_string(), serde_json::to_value(out)?);
+        }
+    }
+    let out = serde_json::json!({
+        "triggers": resolver.out.triggers,
+        "nodes": resolver.out.nodes,
+        "attenuations": attenuations,
+        "buses": buses,
+    });
+    println!("{}", serde_json::to_string_pretty(&out)?);
     Ok(())
 }
 

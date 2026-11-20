@@ -1,3 +1,5 @@
+//! Soundbank (`.bnk`) sections: BKHD, DIDX/DATA (embedded media), HIRC, STID.
+
 use std::collections::HashMap;
 
 use starbreaker_common::SpanReader;
@@ -110,6 +112,11 @@ impl<'a> BnkFile<'a> {
     pub fn wem_data_by_id(&self, id: u32) -> Result<&'a [u8], BnkError> {
         let entry = self.wem_entry(id).ok_or(BnkError::WemNotFound { id })?;
         self.wem_data(entry)
+    }
+
+    /// Byte range of the DATA section within the bank (empty when the bank has none).
+    pub fn data_section_range(&self) -> std::ops::Range<usize> {
+        self.data_section_offset..self.data_section_offset + self.data_section_size
     }
 
     /// Number of embedded WEM files.

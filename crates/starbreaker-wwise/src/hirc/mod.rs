@@ -360,6 +360,11 @@ impl Hierarchy {
         Hierarchy { objects }
     }
 
+    /// A hierarchy with no objects (a bank without HIRC).
+    pub fn empty() -> Self {
+        Hierarchy { objects: HashMap::new() }
+    }
+
     pub fn get(&self, id: u32) -> Option<&HircObject> {
         self.objects.get(&id)
     }

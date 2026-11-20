@@ -12,6 +12,7 @@ Within that export root:
 - `Packages/<package name>/liveries.json` groups scene and material usage by shared palette identity.
 - `Packages/<package name>/paints.json` (only when the entity has paint variants) lists each variant's `subgeometry_tag`, `palette_id`, `display_name`, and `exterior_material_sidecar`. The addon treats it as optional.
 - `Packages/<package name>/animations/<clip>.json` holds per-clip animation bodies (see [Animation Records](#animation-records)).
+- `Packages/<package name>/audio.json` holds the package's audio: triggers resolved to Wwise playable trees, attenuations, buses, rooms and their reverb environments (see [Audio](#audio-wp-a1)); the media are `Audio/<id>.ogg` and `Audio/ir/<id>.f32`.
 - `Packages/<package name>/weapon_assembly_diagnostics.json` is written only for FPS weapon assemblies that produced diagnostics.
 - `Data/...` contains reusable mesh assets, material sidecars, and exported textures using canonical P4k-style paths rooted at `Data/`. Mesh assets are `.glb` with the Glb format and `.blend` with the Blend format (`mesh_asset_extension`); the Blend format also writes `Packages/<package name>/scene.blend`, which links the mesh `.blend` files.
 - exporting another ship to the same root reuses matching `Data/...` assets instead of duplicating category-specific copies.
@@ -1588,3 +1589,115 @@ the shared player motion ADB supplies the locomotion association. The schema is
 unchanged. Consumers should select `move_speed_tag` alongside stance and view mode.
 The verifier requires every armed standing state to have looping movement queried
 with the same base as its idle and validates all clip/blend-space references.
+
+## Audio (WP-A1)
+
+A decomposed package carries the game's audio for what it contains: `Packages/<package name>/audio.json` and the
+media it references under the shared `Audio/` root (`Audio/<media id>.ogg`, `Audio/ir/<media id>.f32`), reused
+between packages like `Data/` (file kind `AudioAsset`). Writer: `crates/starbreaker-3d/src/decomposed_audio.rs`
+(post-pass of `write_decomposed_export`) over `crates/starbreaker-wwise` (`library`, `playable`, `mix`, `manifest`,
+`convolution`, `datacore_effects`). Game audio is game data: it is decoded only into packages, caches and `out/`,
+never into git.
+
+### Where the triggers come from
+
+The writer collects every ATL trigger the package references:
+
+- `interiors[].audio_spots[]` and `interiors[].audio_areas[]` (placed audio, below);
+- clip sources' `audio_events[]` (`Packages/<name>/animations/*.json`, see [Animation Records](#animation-records));
+- the sound effects of every entity class the scene places (`placements[]`, `entities[]`, `lifts[]`, the root entity);
+- the audio-trigger fields of the item components the viewer plays on the item's own actions (`SCItemFlashlightParams`,
+  `SCItemWeaponComponentParams`).
+
+Every trigger is resolved, playable or not; an unresolvable one keeps a `status` and `reason`.
+
+### Placed audio (`interiors[].audio_spots[]`, `interiors[].audio_areas[]`)
+
+Recognised by DataCore component type (`AudioTriggerSpotParams`, `AudioAreaAmbienceComponentParams` under the entity's
+`PropertiesDataCore`), never by class or name. Positions are container-local, like `lights[]`.
+
+| Field | Spot | Area | Meaning |
+|---|---|---|---|
+| `entity_id`, `name`, `class_guid`, `parent_entity_id` | yes | yes | the `.soc` entity |
+| `position` | yes | yes | container-local metres |
+| `extra_positions` | yes | | positions of linked entities without a trigger: the other points of a multi-position spot |
+| `play_trigger`, `stop_trigger` | yes | yes | ATL trigger names |
+| `room` | yes | | `AudioPropagationComponent staticApcRoom` |
+| `links` | yes | yes | `EntityLinks` targets; an area's links are the spots it governs |
+| `params` | yes | yes | the class component's fields with the instance's overrides on top; nested values flattened with dots (`audioRTPCAreaFadeRtpc.rtpc`) |
+| `shapes` | | yes | the area's extent: the `AreaShape` segments that list it, in the `room_volumes[]` form |
+
+`room_volumes[]` records gain `room_class` (the room entity's `EntityClassGUID`). Clip sources gain `audio_events[]`:
+`{ time (normalised), dir: forward | reverse | both, trigger, bone, offset }` from the rig's `$AnimEventDatabase`
+(`audio_trigger` plays forward over `time`, `audio_trigger_reverse` backward, `audio_trigger_bothdir` either way).
+
+### `audio.json`
+
+```jsonc
+{
+  "version": 1,
+  "emitters": { "spots": 610, "areas": 8 },
+  "triggers": { "<ATL trigger>": {
+      "event", "bank", "duration_type", "duration_s": [min, max], "radius_max",
+      "status": "playable | no_media | event_missing | bank_missing | not_in_atl", "reason",
+      "play": [ { "root": <node>, "delay_s", "fade_in_s", "context": <props> } ],
+      "other": [ { "action_type", "target", "delay_s", "fade_s" } ],      // stop, pause, set state/switch ...
+      "rtpc_dependees": [ "<ATL RTPC>" ] } },
+  "nodes": [ {
+      "id": <HIRC id>, "kind": "sound | random | sequence | blend | switch | mixer", "children": [<node>],
+      // own properties (Wwise adds them down the tree): volume_db, pitch_cents, lpf, hpf (0..100), make_up_gain_db,
+      // game_aux_send_db, output_bus_volume_db, initial_delay_s, random: [[prop, min, max]], rtpc: [<curve>]
+      // inherited by override (nearest node up the chain): bus, spatial, attenuation, use_game_aux, user_aux
+      // sound:    media, source_plugin, loop_count (0 = forever), language_specific
+      // random:   weights, avoid_repeat, shuffle, continuous, loop_count, reset_each_play, transition, transition_s
+      // sequence: restart_backward, continuous, loop_count, transition ...
+      // blend:    layers: [ { rtpc, children: [[child index, curve points]] } ]
+      // switch:   group_type, group_id, default_switch (children = the default branch)
+  } ],
+  "attenuations": { "<id>": { "max_distance", "cone", "volume_dry", "volume_aux_game", "volume_aux_user", "lpf",
+                              "hpf", "spread", "focus" } },          // each { scaling, points: [[x, y, interp]] }
+  "buses": { "<id>": { "name", "parent", "aux", "voice_volume_db", "bus_volume_db", "make_up_gain_db", "rtpc",
+                       "rtpc_default_db", "rtpc_without_default", "state_groups",
+                       "effects": [ { "slot", "id", "plugin", "kind", "convolution", "ir_media", "gain_db", "eq" } ] } },
+  "media": { "<id>": { "file": "Audio/<id>.ogg", "codec", "channels", "rate", "seconds", "source", "error" } },
+  "rtpcs": { "<ATL RTPC>": { "wwise_name", "min", "max", "default" } },
+  "environments": { "<ATL environment>": { "aux_bus", "record", "size": [min, max], "interiority": [min, max],
+      "impulse_response": { "media", "file": "Audio/ir/<id>.f32", "channels", "rate", "frames", "peak_db",
+                            "header_peak_db", "t20_s", "t30_s", "onset_s" } } },
+  "environment_records": [ { "environment", "record", "size", "interiority" } ],
+  "rooms": { "<room GUID>": { "name", "class", "volume_m3", "size_m", "interiority", "environment", "rule" } },
+  "entity_classes": { "<class GUID>": { "name",
+      "effects": [ { "on": "trigger | tag", "tag", "tag_path", "label", "trigger", "bone", "offset", "multi_position" } ],
+      "actions": [ { "path", "trigger" } ] } },
+  "root_entity_class": "<class GUID>"
+}
+```
+
+Rules a player follows (all values are the game's; nothing is chosen per asset):
+
+- **Trees.** A Play action plays its `root` after `delay_s`. Random containers pick by `weights`, avoiding the last
+  `avoid_repeat` picks; sequences play in order. `continuous` containers chain their items (`transition`,
+  `transition_s`) and loop `loop_count` times (0 forever); step containers play one item per play. Blends play every
+  child; switches their default branch. A sound plays `loop_count` times (0 forever).
+- **Gains.** A voice's volume is the action `context` plus every node's own `volume_db` / `make_up_gain_db` /
+  `output_bus_volume_db` from the root to the leaf, plus each node's `random` draw, plus its `rtpc` curves at the voice's
+  RTPC values (ATL `default` unless the player drives the RTPC: a spot's `Volume` and `Pitch`, an area's and its spots'
+  `area_fade_distance`, the listener-relative `Azimuth` and `Listener_Cone`), plus the bus chain (`voice_volume_db` +
+  `bus_volume_db` + `rtpc_default_db` + `gain_db` of Gain effects), plus the attenuation's `volume_dry` curve at the
+  emitter distance (a spot's distances scaled by its `attenuationScalingFactor`). Curves with `scaling` 2 (dB) store
+  `10^(dB/20) − 1` (0 is unity, −1 silence; the banks' values hit round dB exactly). Pitch adds in cents the same way.
+- **Reverb.** A voice whose node has `use_game_aux` sends to the environment of the room it is in (`rooms[].environment`
+  → `environments[].aux_bus`), at its summed `game_aux_send_db` plus the attenuation's `volume_aux_game` curve. An
+  environment's aux bus runs a Wwise Convolution Reverb (`buses[].effects[].convolution`: wet, dry, pre-delay) over
+  `impulse_response` (interleaved little-endian `f32`, time domain, rebuilt from the plugin's partitioned bfloat16
+  spectra; `starbreaker_wwise::convolution` documents the layout).
+- **Rooms.** `rooms[].environment` is the room class's `AudioPropagationParams.audioEnvironment` when set; else the
+  `AudioEnvironment` record whose `interiority` range holds the class's `physicalEncapsulationValue` and whose `size`
+  range holds `size_m` = cube root of the room's volume (the nearest range when between ranges). The size metric is
+  the exporter's reading of the records' ranges (metres); the engine's own metric is not in the data.
+
+Open items (not derivable from the data; not applied): the shapes of the non-linear curve interpolations
+(`mix::evaluate` documents the forms used), the mapping of Wwise LPF/HPF amounts (0..100) to cut-off frequencies,
+spread and focus, bus EQ / compressor / limiter / meter effects, ducking, state groups (the game sets states at run
+time), LFO modulators, switch values other than the default, and the two zero words at offset 40 of an
+impulse-response header.

@@ -70,3 +70,39 @@ fn an_empty_external_source_search_lists_everything() {
     let languages: Vec<&str> = all.iter().map(|e| e.language.as_str()).collect();
     assert_eq!(languages, ["English(US)", "German(DE)"]);
 }
+
+/// Durations, RTPC dependees, environments and RTPCs of a text document.
+#[test]
+fn text_document_indexes_durations_environments_and_rtpcs() {
+    const ENV_DOC: &str = r#"<ATLConfig atl_name="Env">
+  <AudioTriggers>
+    <ATLTrigger atl_name="Play_Door">
+      <WwiseEvent wwise_duration_max="4.5" wwise_duration_min="4.25" wwise_duration_type="OneShot" wwise_name="Play_Door" wwise_radius_max="10" />
+      <RTPCDependees><ATLRTPCDependee atl_name="area_fade" /></RTPCDependees>
+    </ATLTrigger>
+  </AudioTriggers>
+  <AudioPreloads />
+  <AudioEnvironments>
+    <ATLEnvironment atl_name="VERB_Room" path="Busses">
+      <WwiseAuxBus wwise_name="VERB_Room_Bus" />
+      <WwiseRtpc wwise_name="Weapon_Env" listener_rtpc="true" min="0" max="1" default="0" />
+    </ATLEnvironment>
+  </AudioEnvironments>
+  <AudioRTPCs>
+    <ATLRtpc atl_name="area_fade" path="Parameters">
+      <WwiseRtpc wwise_name="area_fade_w" min="0" max="1" default="0.25" />
+    </ATLRtpc>
+  </AudioRTPCs>
+</ATLConfig>"#;
+    let doc = parse_document(ENV_DOC.as_bytes()).unwrap().expect("text XML");
+    let (atl, _) = index_documents([doc]).unwrap();
+    let trigger = atl.get_trigger("Play_Door").unwrap();
+    assert_eq!((trigger.duration_min, trigger.duration_max), (Some(4.25), Some(4.5)));
+    assert_eq!(trigger.radius_max, Some(10.0));
+    assert_eq!(trigger.rtpc_dependees, vec!["area_fade".to_owned()]);
+    assert_eq!(atl.environment("VERB_Room").unwrap().aux_bus, "VERB_Room_Bus");
+    let rtpc = atl.rtpc("area_fade").unwrap();
+    assert_eq!((rtpc.wwise_name.as_str(), rtpc.default), ("area_fade_w", Some(0.25)));
+    // The environment's own WwiseRtpc is not an ATL RTPC.
+    assert!(atl.rtpc("Weapon_Env").is_none());
+}

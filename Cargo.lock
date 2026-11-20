@@ -4993,6 +4993,7 @@ dependencies = [
  "starbreaker-gfx",
  "starbreaker-p4k",
  "starbreaker-ui",
+ "starbreaker-wwise",
  "thiserror 2.0.21",
  "zerocopy",
 ]
@@ -5217,8 +5218,11 @@ dependencies = [
 name = "starbreaker-wwise"
 version = "0.3.2"
 dependencies = [
+ "log",
  "quick-xml",
+ "rayon",
  "serde",
+ "serde_json",
  "starbreaker-common",
  "starbreaker-cryxml",
  "starbreaker-datacore",
