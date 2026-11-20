@@ -85,14 +85,14 @@ pub(crate) struct ClassFacts {
     pub proximity_sensor: bool,
 }
 
-fn text<'a>(value: &'a Value<'a>) -> Option<&'a str> {
+pub(super) fn text<'v, 'a>(value: &'v Value<'a>) -> Option<&'a str> {
     match value {
-        Value::String(s) | Value::Locale(s) | Value::Enum(s) => Some(s),
+        Value::String(s) | Value::Locale(s) | Value::Enum(s) => Some(*s),
         _ => None,
     }
 }
 
-fn boolean(value: &Value) -> Option<bool> {
+pub(super) fn boolean(value: &Value) -> Option<bool> {
     match value {
         Value::Bool(b) => Some(*b),
         _ => None,
@@ -100,11 +100,11 @@ fn boolean(value: &Value) -> Option<bool> {
 }
 
 /// The `Name` of a (followed) interaction pointer.
-fn interaction_name(value: Option<&Value>) -> Option<String> {
+pub(super) fn interaction_name(value: Option<&Value>) -> Option<String> {
     value.and_then(|v| field(v, "Name")).and_then(text).filter(|s| !s.is_empty()).map(str::to_string)
 }
 
-fn query<'a>(db: &'a Database, record: &Record, path: &str) -> Option<Value<'a>> {
+pub(super) fn query<'a>(db: &'a Database, record: &Record, path: &str) -> Option<Value<'a>> {
     let compiled = db.compile_path::<Value>(record.struct_id(), path).ok()?;
     db.query_single::<Value>(&compiled, record).ok().flatten()
 }
@@ -232,18 +232,26 @@ pub(crate) fn interaction_points(interactable: &Value) -> Vec<InteractionPoint> 
             let interactions: Vec<PointInteraction> = list
                 .iter()
                 .filter_map(|i| {
+                    let shared = field(i, "Interaction")?;
+                    let display = |value| text(value).filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("@LOC_EMPTY"));
                     Some(PointInteraction {
-                        name: interaction_name(field(i, "Interaction"))?,
-                        display_name_key: field(i, "DisplayName").and_then(text).filter(|s| !s.is_empty()).map(str::to_string),
+                        name: interaction_name(Some(shared))?,
+                        // The point can override the label; LOC_EMPTY means it
+                        // uses the label from its shared interaction.
+                        display_name_key: field(i, "DisplayName").and_then(display)
+                            .or_else(|| field(shared, "DisplayName").and_then(display)).map(str::to_string),
                         display_name: None,
                         primary: field(i, "IsPrimary").and_then(boolean).unwrap_or(false),
                     })
                 })
                 .collect();
+            let constraint = field(point, "AngleConstraint");
             (!interactions.is_empty()).then(|| InteractionPoint {
                 index,
                 helper_name,
                 radius: field(point, "Radius").and_then(number),
+                angle_range: constraint.and_then(|c| field(c, "angleRange")).and_then(number),
+                view_angle_limit: constraint.and_then(|c| field(c, "viewAngleLimit")).and_then(number),
                 helper_transform: None,
                 interactions,
             })

@@ -1494,6 +1494,9 @@ pub struct InteractionPoint {
     pub index: usize,
     pub helper_name: String,
     pub radius: Option<f32>,
+    /// Authored interaction point and view angle limits, in degrees.
+    pub angle_range: Option<f32>,
+    pub view_angle_limit: Option<f32>,
     /// The helper's frame in the entity's geometry (column-major 4×4, metres),
     /// when the geometry carries it; set for geometry-less entities, whose
     /// helpers a consumer cannot read from a mesh.

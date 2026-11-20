@@ -62,6 +62,8 @@ pub(crate) mod lifts;
 pub(crate) use self::interior_animation::*;
 pub(crate) mod engine_glow;
 mod vehicle_xml;
+pub(crate) mod seat_controls;
+pub(crate) mod seat_records;
 mod vehicle;
 pub use self::vehicle::*;
 mod vehicle_lights;

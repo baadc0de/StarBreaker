@@ -70,6 +70,8 @@ fn panel(links: &[(&str, &str, &str)], interactions: &[(&str, Option<&str>)]) ->
                 index: 0,
                 helper_name: "$proxy".into(),
                 radius: None,
+                angle_range: None,
+                view_angle_limit: None,
                 helper_transform: None,
                 interactions: interactions
                     .iter()
