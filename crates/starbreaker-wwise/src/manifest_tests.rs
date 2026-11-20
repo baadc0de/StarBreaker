@@ -36,3 +36,22 @@ fn a_truncated_last_page_keeps_the_previous_granule() {
     ogg.extend(cut);
     assert_eq!(last_granule(&ogg), Some(48_000));
 }
+
+/// A Wwise 2012+ media whose audio peaks above full scale (the quantum-travel exit, +1.2 dBFS once decoded) is
+/// valid Vorbis with the aoTuV codebooks; the codebook check must not reject it for clipping (it was dropped from
+/// packages with "validation failed with both codebooks"). Game data: skipped without a Data.p4k.
+#[test]
+fn a_clipping_media_still_decodes() {
+    let p4k = match starbreaker_p4k::open_p4k() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("skip: no Data.p4k ({e})");
+            return;
+        }
+    };
+    let wem = p4k.read_file(r"Data\Sounds\wwise\Media\72171900.wem").expect("the media is in the archive");
+    let ogg = starbreaker_wem::decode::vorbis_to_ogg(&wem).expect("decodes");
+    let wem_file = starbreaker_wem::WemFile::parse(&wem).unwrap();
+    let seconds = last_granule(&ogg).unwrap() as f32 / wem_file.sample_rate() as f32;
+    assert!((seconds - 3.634).abs() < 0.01, "{seconds} s");
+}
