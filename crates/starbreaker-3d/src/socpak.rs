@@ -776,7 +776,7 @@ fn parse_soc(
                     lights.extend(entity_lights);
                     room_volumes.extend(room_volume::extract_room_volumes(&xml, room_guids));
                     let (spots, areas, untriggered) = audio_entities::extract_audio_entities(&xml);
-                    audio.extend(audio_entities::InteriorAudio { spots, areas, untriggered }, glam::Mat4::IDENTITY.to_cols_array_2d());
+                    audio.extend(audio_entities::InteriorAudio { spots, areas, untriggered, ..Default::default() }, glam::Mat4::IDENTITY.to_cols_array_2d());
                 }
                 Err(e) => log::warn!("failed to parse CryXMLB in {name}: {e}"),
             },
@@ -1417,7 +1417,6 @@ const SKIP_ENTITY_CLASSES: &[&str] = &[
     "PlanetAreaEntity",
     "ProceduralPointOfInterestProxy",
     "Room",
-    "RoomConnector",
     "SafeTeleportPoint",
     "SCShop",
     "SequenceObjectItem",

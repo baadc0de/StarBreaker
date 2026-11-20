@@ -228,6 +228,10 @@ pub struct BusOut {
     pub voice_volume_db: f32,
     pub bus_volume_db: f32,
     #[serde(skip_serializing_if = "is_zero")]
+    pub output_bus_lpf: f32,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub output_bus_hpf: f32,
+    #[serde(skip_serializing_if = "is_zero")]
     pub make_up_gain_db: f32,
     #[serde(skip_serializing_if = "is_zero")]
     pub pitch_cents: f32,
@@ -348,6 +352,8 @@ pub fn bus_chain(resolver: &Resolver<'_, '_>, bus: u32) -> Vec<(u32, BusOut)> {
                 aux,
                 voice_volume_db: object.prop(prop_id::VOLUME).unwrap_or(0.0),
                 bus_volume_db: object.prop(prop_id::BUS_VOLUME).unwrap_or(0.0),
+                output_bus_lpf: object.prop(prop_id::OUTPUT_BUS_LPF).unwrap_or(0.0),
+                output_bus_hpf: object.prop(prop_id::OUTPUT_BUS_HPF).unwrap_or(0.0),
                 make_up_gain_db: object.prop(prop_id::MAKE_UP_GAIN).unwrap_or(0.0),
                 pitch_cents: object.prop(prop_id::PITCH).unwrap_or(0.0),
                 rtpc: curves,

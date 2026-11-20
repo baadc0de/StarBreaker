@@ -110,6 +110,8 @@ mod tests {
             room_name: None,
             room_class_guid: None,
             source_entity: "soup".into(),
+            area_group: None,
+            area_priority: None,
             transform: glam::Mat4::IDENTITY.to_cols_array_2d(),
             shape: RoomVolumeShape::Trimesh {
                 vertices: triangles.iter().flatten().copied().collect(),

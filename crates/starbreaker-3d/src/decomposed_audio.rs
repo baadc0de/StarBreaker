@@ -90,6 +90,18 @@ impl AudioClasses {
             .map(|a| {
                 let mut v = self.placed_json(db, a, "AudioAreaAmbienceComponentParams");
                 v["shapes"] = Json::Array(a.shapes.iter().map(|s| s.to_json()).collect());
+                if let Some(first) = a.shapes.first() {
+                    if let Some(group) = first.area_group.filter(|group|
+                        a.shapes.iter().all(|shape| shape.area_group == Some(*group))
+                    ) {
+                        v["group"] = json!(group);
+                    }
+                    if let Some(priority) = first.area_priority.filter(|priority|
+                        a.shapes.iter().all(|shape| shape.area_priority == Some(*priority))
+                    ) {
+                        v["priority"] = json!(priority);
+                    }
+                }
                 v
             })
             .collect()
@@ -366,6 +378,7 @@ pub(crate) fn add_package_audio(db: &Database<'_>, p4k: &MappedP4k, files: &mut 
                 "volume_m3": volume,
                 "size_m": size,
                 "interiority": interiority,
+                "physical_encapsulation": interiority,
                 "environment": chosen,
                 "selection": selection,
                 "candidates": candidates,
@@ -388,6 +401,13 @@ pub(crate) fn add_package_audio(db: &Database<'_>, p4k: &MappedP4k, files: &mut 
     value["entity_classes"] = Json::Object(entity_classes);
     value["root_entity_class"] = json!(root_class);
     value["rooms"] = Json::Object(room_out);
+    value["game_contexts"] = json!(dce::game_contexts(db));
+    if let Some(pathing) = dce::propagation_pathing(db) {
+        value["propagation_pathing"] = json!(pathing);
+    }
+    if let Some(surfaces) = crate::decomposed_propagation::surface_obstructions(p4k) {
+        value["surface_obstruction"] = json!(surfaces);
+    }
     value["environment_records"] = json!(environments.iter().map(|(n, e)| json!({ "environment": n, "record": e.record, "size": [e.size.0, e.size.1], "interiority": [e.interiority.0, e.interiority.1] })).collect::<Vec<_>>());
     value["emitters"] = json!({ "spots": spot_count, "areas": area_count });
     let resolved = manifest.triggers.values().filter(|t| t.status == "playable").count();

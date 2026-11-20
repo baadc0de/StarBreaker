@@ -97,6 +97,10 @@ pub struct AudioManifest {
     pub media: BTreeMap<String, MediaOut>,
     pub rtpcs: BTreeMap<String, RtpcOut>,
     pub environments: BTreeMap<String, EnvironmentOut>,
+    #[serde(flatten)]
+    pub global_settings: Option<crate::stmg::GlobalSettings>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub environmental_curves: Vec<crate::stmg::EnvironmentalCurve>,
 }
 
 /// A file to add to the package.
@@ -249,6 +253,8 @@ impl<'l, 'p> ManifestBuilder<'l, 'p> {
             media,
             rtpcs,
             environments,
+            global_settings: init.as_ref().and_then(|bank| bank.global_settings.clone()),
+            environmental_curves: init.as_ref().map(|bank| bank.environment_curves.clone()).unwrap_or_default(),
         };
         (manifest, payloads)
     }

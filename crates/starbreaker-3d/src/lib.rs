@@ -2,6 +2,7 @@
 pub mod dequant;
 pub(crate) mod decomposed;
 pub(crate) mod decomposed_audio;
+mod decomposed_propagation;
 pub(crate) mod decomposed_physics;
 pub(crate) mod physics_class;
 pub(crate) mod physics_grid;

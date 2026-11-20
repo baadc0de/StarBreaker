@@ -10,7 +10,7 @@
 //! - [`audio_environments`]: `AudioEnvironment` records (ATL environment, size and interiority ranges).
 //! - [`propagation`]: an entity class's `AudioPropagationParams` (explicit environment, encapsulation).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde::Serialize;
 use starbreaker_datacore::database::Database;
@@ -232,5 +232,102 @@ pub fn propagation(db: &Database<'_>, record: &Record) -> Option<Propagation> {
         audio_environment,
         physical_encapsulation: number(field(&value, "physicalEncapsulationValue")),
         physical_occlusion_when_closed: number(field(&value, "physicalOcclusionValueWhenClosed")),
+    })
+}
+
+/// One configured audio game context's authored state assignments and RTPC values.
+#[derive(Debug, Serialize)]
+pub struct GameContext {
+    pub states: BTreeMap<String, String>,
+    pub rtpcs: BTreeMap<String, f32>,
+}
+
+fn array_values(values: Vec<Value<'_>>) -> impl Iterator<Item = Value<'_>> {
+    values.into_iter().flat_map(|value| match value {
+        Value::Array(items) => items,
+        item => vec![item],
+    })
+}
+
+/// Emit only globals referenced by AudioGameContextSetup, keyed by the globals record's name.
+pub fn game_contexts(db: &Database<'_>) -> BTreeMap<String, GameContext> {
+    let file_stem = |path: &str| {
+        let file = path.rsplit(['/', '\\']).next().unwrap_or(path);
+        file.rsplit_once('.').map_or(file, |(stem, _)| stem).to_ascii_lowercase()
+    };
+    let globals: HashMap<_, _> = db.records_by_type_name("AudioGameContextGlobals")
+        .map(|record| (file_stem(db.resolve_string(record.file_name_offset)), record))
+        .collect();
+    let mut contexts = BTreeMap::new();
+    for setup in db.records_by_type_name("AudioGameContextSetup") {
+        for context in array_values(query(db, setup, "gameContexts")) {
+            let globals_ref = field(&context, "globalRtpcsAndStates");
+            let record = match globals_ref {
+                Some(Value::Guid(id) | Value::Object { record_id: Some(id), .. }) => db.record_by_id(id),
+                Some(Value::String(path)) => globals.get(&file_stem(path)).copied(),
+                _ => None,
+            };
+            let Some(record) = record else { continue };
+            let name = db.resolve_string2(record.name_offset)
+                .rsplit('.').next().unwrap_or_default();
+            let states = array_values(query(db, record, "globalStates")).filter_map(|entry| {
+                let (group, state) = string(field(&entry, "switch"))?.split_once(':')?;
+                Some((group.to_owned(), state.to_owned()))
+            }).collect();
+            let rtpcs = array_values(query(db, record, "globalRTPCs")).filter_map(|entry| {
+                let name = string(field(&entry, "rtpc"))?;
+                let value = number(field(&entry, "defaultValue"))?;
+                Some((name.to_owned(), value))
+            }).collect();
+            contexts.insert(name.to_owned(), GameContext { states, rtpcs });
+        }
+    }
+    contexts
+}
+
+/// Authored portal-pathing policy, separate from the room-graph attenuation parameter.
+#[derive(Debug, Serialize)]
+pub struct PropagationPathing {
+    pub enabled: bool,
+    pub actor_only: bool,
+}
+
+pub fn propagation_pathing(db: &Database<'_>) -> Option<PropagationPathing> {
+    let record = db.records_by_type_name("GlobalAudioSettings")
+        .find(|r| db.resolve_string2(r.name_offset).ends_with(".GlobalSettings"))?;
+    let flag = |path| query(db, record, path).into_iter().find_map(|v| match v {
+        Value::Bool(flag) => Some(flag),
+        _ => None,
+    });
+    Some(PropagationPathing {
+        enabled: flag("enablePropagationPathing")?,
+        actor_only: flag("enablePropagationPathingActorOnly")?,
+    })
+}
+
+/// A placement class carrying the authored room-connector component.
+pub struct RoomConnectorClass {
+    pub bounds: Option<[f32; 3]>,
+    pub offset: Option<[f32; 3]>,
+    pub is_door: bool,
+    pub physical_occlusion_when_closed: Option<f32>,
+}
+
+pub fn room_connector(db: &Database<'_>, record: &Record) -> Option<RoomConnectorClass> {
+    let component = query(db, record, "Components[SEntityComponentRoomConnectorParams]").into_iter().next()?;
+    let vector = |key| {
+        let value = field(&component, key)?;
+        Some([
+            number(field(value, "x"))?,
+            number(field(value, "y"))?,
+            number(field(value, "z"))?,
+        ])
+    };
+    Some(RoomConnectorClass {
+        bounds: vector("defaultAreaBounds"),
+        offset: vector("boundsOffset"),
+        is_door: !query(db, record, "Components[SCItemDoorParams]").is_empty(),
+        physical_occlusion_when_closed: number(field(&component, "physicalOcclusionValueWhenClosed"))
+            .or_else(|| propagation(db, record).and_then(|p| p.physical_occlusion_when_closed)),
     })
 }

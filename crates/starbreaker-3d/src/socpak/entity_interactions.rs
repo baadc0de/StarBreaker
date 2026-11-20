@@ -99,6 +99,23 @@ fn component<'a>(xml: &CryXml<'a>, entity: &CryXmlNode, type_name: &str) -> Opti
 /// Instance overrides of the components this exporter reads.
 pub(crate) fn overrides(xml: &CryXml, entity: &CryXmlNode) -> EntityOverrides {
     let mut out = EntityOverrides::default();
+    if let Some(connector) = component(xml, entity, "SEntityComponentRoomConnectorParams") {
+        let vector = |name| {
+            let node = child(xml, connector, name)?;
+            Some([
+                attr(xml, node, "x")?.parse().ok()?,
+                attr(xml, node, "y")?.parse().ok()?,
+                attr(xml, node, "z")?.parse().ok()?,
+            ])
+        };
+        out.room_connector_bounds = vector("defaultAreaBounds");
+        out.room_connector_offset = vector("boundsOffset");
+        out.room_connector_closed_occlusion = attr(xml, connector, "physicalOcclusionValueWhenClosed").and_then(|v| v.parse().ok());
+    }
+    if let Some(audio) = component(xml, entity, "AudioPropagationParams") {
+        out.room_connector_closed_occlusion = attr(xml, audio, "physicalOcclusionValueWhenClosed")
+            .and_then(|v| v.parse().ok()).or(out.room_connector_closed_occlusion);
+    }
     if let Some(door) = component(xml, entity, "SCItemDoorParams") {
         out.door_animation_speed = attr(xml, door, "DoorAnimationSpeed").and_then(|v| v.parse().ok());
         out.use_auto_close_delay = attr(xml, door, "UseAutoCloseDelay").map(|v| v == "1" || v.eq_ignore_ascii_case("true"));

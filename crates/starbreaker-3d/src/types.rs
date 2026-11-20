@@ -1313,6 +1313,10 @@ pub struct EntityOverrides {
     /// `SCItemDoorParams/AnimationParams`: its `__type` and authored tags
     /// (`TransitionTag`, `OpenTag`, `CloseTag`), when the instance authors it.
     pub door_animation: Option<DoorAnimationOverride>,
+    /// Instance-authored room connector settings. Missing fields inherit the class.
+    pub room_connector_bounds: Option<[f32; 3]>,
+    pub room_connector_offset: Option<[f32; 3]>,
+    pub room_connector_closed_occlusion: Option<f32>,
     /// `SCItemElevatorPathNodeParams/gatewayParams@interaction` (non-empty).
     pub gateway_interaction: Option<String>,
     /// `SCItemElevatorPathNodeParams/accessibilityParams` (`__type`,

@@ -850,13 +850,15 @@ pub(crate) fn build_interiors_from_payloads(
             &placed,
         );
 
+        let mut audio = payload.audio.clone();
+        audio.room_connectors = crate::decomposed_propagation::room_connectors(db, &payload.meshes);
         container_data.push(InteriorContainerData {
             name: payload.name.clone(),
             parent_entity_name: payload.parent_entity_name.clone(),
             parent_node_name: payload.parent_node_name.clone(),
             container_transform: payload.container_transform,
             room_volumes: payload.room_volumes.clone(),
-            audio: payload.audio.clone(),
+            audio,
             placements,
             lights: if include_lights {
                 payload

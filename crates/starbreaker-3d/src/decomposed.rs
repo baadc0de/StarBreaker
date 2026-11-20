@@ -602,6 +602,7 @@ struct InteriorContainerRecord {
     /// Placed audio (WP-A1): `audio_spots[]` / `audio_areas[]` with class defaults resolved.
     audio_spots: Vec<serde_json::Value>,
     audio_areas: Vec<serde_json::Value>,
+    room_connectors: Vec<crate::decomposed_propagation::RoomConnector>,
     proximity_sensors: Vec<serde_json::Value>,
     inventory_containers: Vec<serde_json::Value>,
     /// Geometry-less interactive entities (WP-P5).
@@ -2116,6 +2117,7 @@ pub(crate) fn write_decomposed_export(
             room_volumes: container.room_volumes.iter().map(|volume| volume.to_json()).collect(),
             audio_spots: audio_classes.spots_json(db, &container.audio),
             audio_areas: audio_classes.areas_json(db, &container.audio),
+            room_connectors: container.audio.room_connectors.clone(),
             proximity_sensors: container.proximity_sensors.iter().map(|sensor| sensor.to_json()).collect(),
             inventory_containers: container.inventory_containers.iter().map(|c| c.to_json()).collect(),
             entities: container.entities.iter().map(|e| e.to_json()).collect(),
@@ -2634,6 +2636,7 @@ fn interior_container_json(container: &InteriorContainerRecord) -> serde_json::V
         "room_volumes": container.room_volumes,
         "audio_spots": container.audio_spots,
         "audio_areas": container.audio_areas,
+        "room_connectors": container.room_connectors,
         "proximity_sensors": container.proximity_sensors,
         "inventory_containers": container.inventory_containers,
         "entities": container.entities,
@@ -8247,6 +8250,7 @@ mod tests {
             room_volumes: vec![serde_json::json!({ "kind": "box" })],
             audio_spots: Vec::new(),
             audio_areas: Vec::new(),
+            room_connectors: Vec::new(),
             proximity_sensors: vec![serde_json::json!({ "entity_id": "sensor-id", "links": ["door-id"] })],
             inventory_containers: vec![serde_json::json!({ "entity_id": "grid-id" })],
             entities: Vec::new(),

@@ -62,6 +62,7 @@ pub struct InteriorAudio {
     pub areas: Vec<PlacedAudio>,
     /// Spot components without a trigger (positions of multi-position spots, or unused).
     pub untriggered: usize,
+    pub(crate) room_connectors: Vec<crate::decomposed_propagation::RoomConnector>,
 }
 
 impl InteriorAudio {

@@ -51,6 +51,9 @@ pub struct RoomVolume {
     pub room_class_guid: Option<String>,
     /// Authored name of the entity carrying the `AreaComponent`. Label only.
     pub source_entity: String,
+    /// AreaComponent membership and priority, when authored on the source component.
+    pub area_group: Option<i32>,
+    pub area_priority: Option<i32>,
     /// 4×4 column-major transform: segment space → container-local space.
     pub transform: [[f32; 4]; 4],
     pub shape: RoomVolumeShape,
@@ -75,6 +78,12 @@ impl RoomVolume {
             "transform": self.transform,
         });
         let object = value.as_object_mut().expect("json object");
+        if let Some(group) = self.area_group {
+            object.insert("group".into(), serde_json::json!(group));
+        }
+        if let Some(priority) = self.area_priority {
+            object.insert("priority".into(), serde_json::json!(priority));
+        }
         match &self.shape {
             RoomVolumeShape::Box { min, max } => {
                 object.insert("kind".into(), "box".into());
@@ -203,6 +212,12 @@ pub(crate) fn extract_room_volumes(xml: &CryXml, rooms: &HashSet<String>) -> Vec
             continue;
         };
 
+        let area_property = |name| xml.node_attributes(area)
+            .find(|(key, _)| *key == name)
+            .and_then(|(_, value)| value.parse().ok());
+        let area_group = area_property("Group");
+        let area_priority = area_property("Priority");
+
         let attrs: HashMap<&str, &str> = xml.node_attributes(entity).collect();
         let source_entity = attrs.get("Name").copied().unwrap_or_default().to_string();
         let entity_transform = glam::Mat4::from_scale_rotation_translation(
@@ -230,6 +245,8 @@ pub(crate) fn extract_room_volumes(xml: &CryXml, rooms: &HashSet<String>) -> Vec
                 room_class_guid: room_classes.get(&room_guid).cloned(),
                 room_guid: room_guid.clone(),
                 source_entity: source_entity.clone(),
+                area_group,
+                area_priority,
                 transform: (entity_transform * segment_transform).to_cols_array_2d(),
                 shape,
             });

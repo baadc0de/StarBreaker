@@ -29,6 +29,8 @@ pub struct LoadedBank {
     pub hierarchy: Hierarchy,
     /// `STMG` game-parameter defaults (`Init.bnk`; empty elsewhere).
     pub game_parameter_defaults: HashMap<u32, f32>,
+    pub global_settings: Option<crate::stmg::GlobalSettings>,
+    pub environment_curves: Vec<crate::stmg::EnvironmentalCurve>,
     bytes: Vec<u8>,
     data: std::ops::Range<usize>,
     didx: Vec<DataIndexEntry>,
@@ -44,29 +46,28 @@ impl LoadedBank {
             bytes.extend_from_slice(data);
         }
         let data = 0..bytes.len();
-        Self { name: name.to_owned(), version: 154, hierarchy, game_parameter_defaults: HashMap::new(), bytes, data, didx }
+        Self { name: name.to_owned(), version: 154, hierarchy, game_parameter_defaults: HashMap::new(), global_settings: None, environment_curves: Vec::new(), bytes, data, didx }
     }
 
     /// Parse a bank file.
     pub fn parse(name: &str, bytes: Vec<u8>) -> Result<Self, crate::BnkError> {
-        let (version, hierarchy, data, didx, stmg) = {
+        use crate::section::SectionTag;
+        let (version, hierarchy, data, didx, stmg, envs) = {
             let bnk = BnkFile::parse(&bytes)?;
             let hierarchy = bnk.hirc.as_ref().map(Hierarchy::from_section).unwrap_or_else(Hierarchy::empty);
-            let stmg = bnk
-                .raw_sections
-                .iter()
-                .find(|s| s.tag == crate::section::SectionTag::Stmg)
-                .map(|s| s.data_offset..s.data_offset + s.data_size);
-            (bnk.header.version, hierarchy, bnk.data_section_range(), bnk.data_index.clone(), stmg)
+            let section = |tag| bnk.raw_sections.iter().find(|s| s.tag == tag)
+                .and_then(|s| bytes.get(s.data_offset..s.data_offset + s.data_size));
+            let global_settings = section(SectionTag::Stmg).and_then(|section| {
+                crate::stmg::parse(section).map_err(|e| log::warn!("[audio] {name} STMG: {e}")).ok()
+            });
+            let environment_curves = section(SectionTag::Envs).and_then(|section| {
+                crate::stmg::parse_environment_curves(section).map_err(|e| log::warn!("[audio] {name} ENVS: {e}")).ok()
+            }).unwrap_or_default();
+            (bnk.header.version, hierarchy, bnk.data_section_range(), bnk.data_index.clone(), global_settings, environment_curves)
         };
-        let game_parameter_defaults = stmg
-            .and_then(|range| bytes.get(range))
-            .map(|section| crate::stmg::game_parameter_defaults(section).unwrap_or_else(|e| {
-                log::warn!("[audio] {name} STMG: {e}");
-                HashMap::new()
-            }))
-            .unwrap_or_default();
-        Ok(Self { name: name.to_owned(), version, hierarchy, game_parameter_defaults, bytes, data, didx })
+        let game_parameter_defaults = stmg.as_ref().map(crate::stmg::GlobalSettings::defaults).unwrap_or_default();
+        Ok(Self { name: name.to_owned(), version, hierarchy, game_parameter_defaults, global_settings: stmg,
+            environment_curves: envs, bytes, data, didx })
     }
 
     /// An embedded media file's bytes.
