@@ -1605,7 +1605,8 @@ The writer collects every ATL trigger the package references:
 
 - `interiors[].audio_spots[]` and `interiors[].audio_areas[]` (placed audio, below);
 - clip sources' `audio_events[]` (`Packages/<name>/animations/*.json`, see [Animation Records](#animation-records));
-- the sound effects of every entity class the scene places (`placements[]`, `entities[]`, `lifts[]`, the root entity);
+- the sound effects of every entity class the scene places (`placements[]`, `entities[]`, `lifts[]`, the root entity,
+  `children[]` whose `entity_name` names a class record);
 - the audio-trigger fields of the item components the viewer plays on the item's own actions (`SCItemFlashlightParams`,
   `SCItemWeaponComponentParams`).
 
@@ -1660,7 +1661,7 @@ Recognised by DataCore component type (`AudioTriggerSpotParams`, `AudioAreaAmbie
                        "rtpc_default_db", "rtpc_without_default", "state_groups",
                        "effects": [ { "slot", "id", "plugin", "kind", "convolution", "ir_media", "gain_db", "eq" } ] } },
   "media": { "<id>": { "file": "Audio/<id>.ogg", "codec", "channels", "rate", "seconds", "source", "error" } },
-  "rtpcs": { "<ATL RTPC>": { "wwise_name", "min", "max", "default" } },
+  "rtpcs": { "<ATL RTPC>": { "wwise_name", "min", "max", "default", "wwise_default" } },   // ATL / Init.bnk STMG defaults
   "environments": { "<ATL environment>": { "aux_bus", "record", "size": [min, max], "interiority": [min, max],
       "impulse_response": { "media", "file": "Audio/ir/<id>.f32", "channels", "rate", "frames", "peak_db",
                             "header_peak_db", "t20_s", "t30_s", "onset_s" } } },

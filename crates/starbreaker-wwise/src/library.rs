@@ -27,6 +27,8 @@ pub struct LoadedBank {
     pub name: String,
     pub version: u32,
     pub hierarchy: Hierarchy,
+    /// `STMG` game-parameter defaults (`Init.bnk`; empty elsewhere).
+    pub game_parameter_defaults: HashMap<u32, f32>,
     bytes: Vec<u8>,
     data: std::ops::Range<usize>,
     didx: Vec<DataIndexEntry>,
@@ -42,17 +44,29 @@ impl LoadedBank {
             bytes.extend_from_slice(data);
         }
         let data = 0..bytes.len();
-        Self { name: name.to_owned(), version: 154, hierarchy, bytes, data, didx }
+        Self { name: name.to_owned(), version: 154, hierarchy, game_parameter_defaults: HashMap::new(), bytes, data, didx }
     }
 
     /// Parse a bank file.
     pub fn parse(name: &str, bytes: Vec<u8>) -> Result<Self, crate::BnkError> {
-        let (version, hierarchy, data, didx) = {
+        let (version, hierarchy, data, didx, stmg) = {
             let bnk = BnkFile::parse(&bytes)?;
             let hierarchy = bnk.hirc.as_ref().map(Hierarchy::from_section).unwrap_or_else(Hierarchy::empty);
-            (bnk.header.version, hierarchy, bnk.data_section_range(), bnk.data_index.clone())
+            let stmg = bnk
+                .raw_sections
+                .iter()
+                .find(|s| s.tag == crate::section::SectionTag::Stmg)
+                .map(|s| s.data_offset..s.data_offset + s.data_size);
+            (bnk.header.version, hierarchy, bnk.data_section_range(), bnk.data_index.clone(), stmg)
         };
-        Ok(Self { name: name.to_owned(), version, hierarchy, bytes, data, didx })
+        let game_parameter_defaults = stmg
+            .and_then(|range| bytes.get(range))
+            .map(|section| crate::stmg::game_parameter_defaults(section).unwrap_or_else(|e| {
+                log::warn!("[audio] {name} STMG: {e}");
+                HashMap::new()
+            }))
+            .unwrap_or_default();
+        Ok(Self { name: name.to_owned(), version, hierarchy, game_parameter_defaults, bytes, data, didx })
     }
 
     /// An embedded media file's bytes.

@@ -21,6 +21,7 @@ pub mod game_audio;
 pub mod hirc;
 pub mod section;
 pub mod stid;
+pub mod stmg;
 
 pub use atl::{AtlIndex, AtlTrigger};
 pub use bnk::BnkFile;

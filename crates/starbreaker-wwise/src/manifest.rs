@@ -43,7 +43,10 @@ pub struct RtpcOut {
     pub wwise_name: String,
     pub min: Option<f32>,
     pub max: Option<f32>,
+    /// The ATL default (`WwiseRtpc default`).
     pub default: Option<f32>,
+    /// The Wwise game parameter's default (`Init.bnk` STMG): the value until the game sets the RTPC.
+    pub wwise_default: Option<f32>,
 }
 
 /// A game environment's DataCore record (`AudioEnvironment`): the room sizes and interiority it is chosen for.
@@ -165,9 +168,11 @@ impl<'l, 'p> ManifestBuilder<'l, 'p> {
             }
         }
         let mut rtpcs = BTreeMap::new();
+        let defaults = init.as_ref().map(|b| b.game_parameter_defaults.clone()).unwrap_or_default();
         let mut note_rtpc = |name: &str| {
             if let Some(a) = lib.atl.rtpc(name) {
-                rtpcs.entry(name.to_owned()).or_insert(RtpcOut { wwise_name: a.wwise_name.clone(), min: a.min, max: a.max, default: a.default });
+                let wwise_default = defaults.get(&crate::fnv1_hash(&a.wwise_name)).copied();
+                rtpcs.entry(name.to_owned()).or_insert(RtpcOut { wwise_name: a.wwise_name.clone(), min: a.min, max: a.max, default: a.default, wwise_default });
             }
         };
         for node in &r.out.nodes {

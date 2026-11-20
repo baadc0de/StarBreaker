@@ -4,7 +4,8 @@
 //!   over its class's DataCore component (`AudioTriggerSpotParams` / `AudioAreaAmbienceComponentParams`), so every
 //!   parameter a player needs is present.
 //! - [`add_package_audio`]: after the scene and clips are written, collect every trigger the package references —
-//!   spots and areas, clip-source `audio_events`, the entity classes' sound effects and the hooked item actions — and
+//!   spots and areas, clip-source `audio_events`, the sound effects and hooked item actions of the classes the scene
+//!   places (interior placements, entities and lifts, the root entity and child items) — and
 //!   the rooms' audio environments, then write `Packages/<name>/audio.json` and the media and impulse responses under
 //!   `Audio/` (shared between packages, like `Data/`). See `docs/decomposed-export-contract.md` §Audio.
 
@@ -247,12 +248,31 @@ pub(crate) fn add_package_audio(db: &Database<'_>, p4k: &MappedP4k, files: &mut 
             }
         }
     }
-    let root_class = scene["root_entity"]["entity_name"]
-        .as_str()
-        .and_then(|name| db.records_by_type_name("EntityClassDefinition").find(|r| db.resolve_string2(r.name_offset) == name))
-        .map(|r| r.id.to_string().to_ascii_lowercase());
+    // The root and child items name their entity class record (`EntityClassDefinition.<name>` or the bare name);
+    // children that name a geometry file have no record and add nothing.
+    let class_of = |name: &str| {
+        let qualified = format!("EntityClassDefinition.{name}");
+        db.records_by_type_name("EntityClassDefinition")
+            .find(|r| {
+                let n = db.resolve_string2(r.name_offset);
+                n == name || n == qualified
+            })
+            .map(|r| r.id.to_string().to_ascii_lowercase())
+    };
+    let root_class = scene["root_entity"]["entity_name"].as_str().and_then(class_of);
     if let Some(root) = &root_class {
         classes.insert(root.clone());
+    }
+    let mut child_names: BTreeSet<&str> = BTreeSet::new();
+    for child in scene["children"].as_array().into_iter().flatten() {
+        if let Some(name) = child["entity_name"].as_str() {
+            child_names.insert(name);
+        }
+    }
+    for name in child_names {
+        if let Some(class) = class_of(name) {
+            classes.insert(class);
+        }
     }
 
     let lib = match AudioLibrary::open(p4k) {
