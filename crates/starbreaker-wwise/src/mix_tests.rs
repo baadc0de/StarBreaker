@@ -92,3 +92,73 @@ fn a_bypassed_effect_slot_says_so() {
     assert!(!chain[0].1.effects[0].bypass);
     assert!(chain[1].1.effects[0].bypass, "bit 0 of the slot's bit vector");
 }
+
+#[test]
+fn a_meter_slot_carries_its_ballistics_and_the_game_parameter_it_writes() {
+    let gp = crate::fnv1_hash("DM_Test_Meter");
+    let objects = vec![bus(1, 0, false, &[], Some(70), None), meter_share_set(70, 0.05, 0.4, -48.0, 0.0, 0.1, 1, 0, true, gp)];
+    let lib = library(atl(&[], &[("DM_Test_Meter", -48.0)]), vec![("Init.bnk", objects, Vec::new())]);
+    let r = crate::playable::Resolver::new(&lib);
+    let fx = &bus_chain(&r, 1)[0].1.effects[0];
+    assert_eq!(fx.kind, "meter");
+    let m = fx.meter.as_ref().expect("meter parameters");
+    assert_eq!((m.attack_s, m.release_s, m.min_db, m.max_db, m.hold_s), (0.05, 0.4, -48.0, 0.0, 0.1));
+    assert!(!m.infinite_hold && m.apply_downstream_volume);
+    assert_eq!((m.mode, m.scope), ("rms", "global"));
+    assert_eq!(m.game_parameter, "DM_Test_Meter", "the ATL name of the written game parameter");
+    assert_eq!(m.game_parameter_id, gp);
+}
+
+#[test]
+fn effect_parameter_rtpcs_come_with_the_effect() {
+    let gp = crate::fnv1_hash("FX_Test");
+    let eq = parametric_eq_share_set(80, [(0, 0.0, 400.0, 1.0, true), (6, 3.0, 1000.0, 0.7, true), (5, 0.0, 5000.0, 1.0, false)], &[(gp, 3, vec![(0.0, 400.0, 4), (1.0, 20000.0, 4)])]);
+    let objects = vec![bus(1, 0, false, &[], Some(80), None), eq];
+    let lib = library(atl(&[], &[("FX_Test", 1.0)]), vec![("Init.bnk", objects, Vec::new())]);
+    let r = crate::playable::Resolver::new(&lib);
+    let fx = &bus_chain(&r, 1)[0].1.effects[0];
+    let eq = fx.eq.as_ref().unwrap();
+    assert_eq!((eq.bands[0].filter, eq.bands[0].frequency_hz), ("lowpass", 400.0));
+    assert_eq!(fx.rtpc.len(), 1);
+    let c = &fx.rtpc[0];
+    assert_eq!((c.rtpc.as_str(), c.param.as_str()), ("FX_Test", "fx_param_3"), "effect parameters keep their plugin id");
+    assert_eq!(c.points, vec![(0.0, 400.0, 4), (1.0, 20000.0, 4)]);
+}
+
+/// A state group that sets an effect slot's bypass (`BypassFX` 0x30 for slot 0, 0x130 for slot 1) makes the slot's
+/// bypass depend on the game's state: the slot names the groups.
+#[test]
+fn a_slot_bypassed_by_state_names_its_state_groups() {
+    let eq = parametric_eq_share_set(80, [(0, 0.0, 400.0, 1.0, true), (6, 0.0, 1000.0, 0.7, true), (5, 0.0, 5000.0, 1.0, false)], &[]);
+    let b = with_state_group(bus(1, 0, false, &[], Some(80), None), 77, &[(5, &[(0x130, 1.0)]), (6, &[(0x30, 1.0)])]);
+    let lib = library(atl(&[], &[]), vec![("Init.bnk", vec![b, eq], Vec::new())]);
+    let r = crate::playable::Resolver::new(&lib);
+    let fx = &bus_chain(&r, 1)[0].1.effects[0];
+    assert_eq!(fx.slot, 0);
+    assert_eq!(fx.state_bypass, vec![StateBypass { group: 77, states: vec![6] }], "slot 0 is bypassed in state 6 only");
+}
+
+/// A gain curve on a game parameter the ATL does not name still has a default: the Wwise game parameter's own
+/// (Init.bnk STMG). The static bus level includes the curve at that default (one resolver for every default).
+#[test]
+fn a_gain_curve_without_an_atl_default_uses_the_stmg_default() {
+    let gp = 0x00C0_FFEE;
+    let objects = vec![bus(1, 0, false, &[], None, Some((gp, vec![(0.0, -0.4988128, 4), (1.0, 0.0, 4)])))];
+    let mut init = crate::library::LoadedBank::from_parts("Init.bnk", hierarchy(objects), &[]);
+    init.game_parameter_defaults.insert(gp, 0.0);
+    let lib = crate::library::AudioLibrary::in_memory(atl(&[], &[]), vec![init]);
+    let r = crate::playable::Resolver::new(&lib);
+    let out = &bus_chain(&r, 1)[0].1;
+    assert!((out.rtpc_default_db - -6.0).abs() < 1e-3, "{}", out.rtpc_default_db);
+    assert!(out.rtpc_without_default.is_empty());
+}
+
+#[test]
+fn an_eq_slot_says_whether_it_processes_the_lfe() {
+    let mut eq = parametric_eq_share_set(80, [(0, 0.0, 400.0, 1.0, true), (6, 0.0, 1000.0, 0.7, false), (5, 0.0, 5000.0, 1.0, false)], &[]);
+    // The fixture writes process-LFE 0 as the last parameter byte; v154 blocks are 56 bytes.
+    let objects = vec![bus(1, 0, false, &[], Some(80), None), { eq.data[8 + 55] = 1; eq }];
+    let lib = library(atl(&[], &[]), vec![("Init.bnk", objects, Vec::new())]);
+    let r = crate::playable::Resolver::new(&lib);
+    assert!(bus_chain(&r, 1)[0].1.effects[0].eq.as_ref().unwrap().process_lfe);
+}

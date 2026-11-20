@@ -55,3 +55,45 @@ fn a_clipping_media_still_decodes() {
     let seconds = last_granule(&ogg).unwrap() as f32 / wem_file.sample_rate() as f32;
     assert!((seconds - 3.634).abs() < 0.01, "{seconds} s");
 }
+
+/// The RTPCs a package needs include those on its buses' effect parameters and the game parameters its meters write
+/// (their defaults are what a side-chain starts from).
+#[test]
+fn effect_and_meter_game_parameters_are_listed_with_their_defaults() {
+    use crate::hirc_fixture::*;
+    let objects = vec![
+        sound(30, 300, 0x0001_0001, &Base { bus: 1, ..Base::default() }),
+        event("Play_Synthetic", &[1000]),
+        action(1000, 0x0403, 30, None),
+    ];
+    let init = vec![
+        bus(1, 2, false, &[], Some(80), None),
+        bus(2, 0, false, &[], Some(70), None),
+        parametric_eq_share_set(80, [(0, 0.0, 400.0, 1.0, true), (6, 0.0, 1000.0, 0.7, false), (5, 0.0, 5000.0, 1.0, false)], &[(crate::fnv1_hash("FX_Test"), 2, vec![(0.0, 2.3, 4), (1.0, 4.3, 4)])]),
+        meter_share_set(70, 0.0, 0.1, -48.0, 0.0, 0.0, 0, 0, false, crate::fnv1_hash("DM_Test")),
+    ];
+    let lib = library(atl(&[("Play_Synthetic", "Test_Bank.bnk", "OneShot")], &[("FX_Test", 1.0), ("DM_Test", -48.0)]), vec![("Test_Bank.bnk", objects, Vec::new()), ("Init.bnk", init, Vec::new())]);
+    let mut b = ManifestBuilder::new(&lib, "Audio");
+    b.trigger("Play_Synthetic");
+    let (m, _) = b.finish();
+    assert_eq!(m.rtpcs.get("FX_Test").and_then(|r| r.default), Some(1.0));
+    assert_eq!(m.rtpcs.get("DM_Test").and_then(|r| r.default), Some(-48.0));
+    assert_eq!(m.buses["2"].effects[0].meter.as_ref().unwrap().game_parameter, "DM_Test");
+}
+
+/// An RTPC the ATL does not name is listed under its id with the Wwise game parameter's default.
+#[test]
+fn an_unnamed_game_parameter_is_listed_with_its_stmg_default() {
+    use crate::hirc_fixture::*;
+    let gp = 0x00C0_FFEE;
+    let objects = vec![sound(30, 300, 0x0001_0001, &Base { bus: 1, ..Base::default() }), event("Play_Synthetic", &[1000]), action(1000, 0x0403, 30, None)];
+    let mut init = crate::library::LoadedBank::from_parts("Init.bnk", hierarchy(vec![bus(1, 0, false, &[], None, Some((gp, vec![(0.0, -1.0, 4), (1.0, 0.0, 4)])))]), &[]);
+    init.game_parameter_defaults.insert(gp, 0.5);
+    let bank = crate::library::LoadedBank::from_parts("Test_Bank.bnk", hierarchy(objects), &[]);
+    let lib = crate::library::AudioLibrary::in_memory(atl(&[("Play_Synthetic", "Test_Bank.bnk", "OneShot")], &[]), vec![bank, init]);
+    let mut b = ManifestBuilder::new(&lib, "Audio");
+    b.trigger("Play_Synthetic");
+    let (m, _) = b.finish();
+    let name = format!("{gp:#010x}");
+    assert_eq!(m.rtpcs.get(&name).and_then(|r| r.wwise_default), Some(0.5), "{:?}", m.rtpcs.keys().collect::<Vec<_>>());
+}

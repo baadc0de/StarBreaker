@@ -1663,9 +1663,16 @@ Recognised by DataCore component type (`AudioTriggerSpotParams`, `AudioAreaAmbie
   "buses": { "<id>": { "name", "parent", "aux", "voice_volume_db", "bus_volume_db", "make_up_gain_db", "rtpc",
                        "rtpc_default_db", "rtpc_without_default", "state_groups",
                        "effects": [ { "slot", "id", "plugin", "kind", "bypass", "convolution", "ir_media", "gain_db", "eq",
-                                      "limiter" } ] } },
+                                      "limiter", "meter", "rtpc", "state_bypass" } ] } },
+  // eq:    { bands: [ { filter: lowpass | highpass | bandpass | notch | lowshelf | highshelf | peaking, gain_db,
+  //          frequency_hz, q, on } x3 ], output_level_db, process_lfe }
+  // meter: { attack_s, release_s, min_db, max_db, hold_s, infinite_hold, mode: peak | rms, scope: global | game_object,
+  //          apply_downstream_volume, game_parameter (ATL name), game_parameter_id }
+  // rtpc:  curves on the effect's own parameters: param "fx_param_<plugin parameter id>", accum (1 exclusive,
+  //        2 additive, 3 multiply), scaling (2 dB, 3 log10)
+  // state_bypass: [ { group, states: [state ids in which the bus's state group bypasses this slot] } ]
   "media": { "<id>": { "file": "Audio/<id>.ogg", "codec", "channels", "rate", "seconds", "source", "error" } },
-  "rtpcs": { "<ATL RTPC>": { "wwise_name", "min", "max", "default", "wwise_default" } },   // ATL / Init.bnk STMG defaults
+  "rtpcs": { "<ATL RTPC, or the id in hex>": { "wwise_name", "min", "max", "default", "wwise_default" } },   // ATL / Init.bnk STMG defaults
   "environments": { "<ATL environment>": { "aux_bus", "record", "size": [min, max], "interiority": [min, max],
       "impulse_response": { "media", "file": "Audio/ir/<id>.f32", "channels", "rate", "frames", "peak_db",
                             "header_peak_db", "t20_s", "t30_s", "onset_s" } } },
@@ -1702,7 +1709,17 @@ Rules a player follows (all values are the game's; nothing is chosen per asset):
   spectra; `starbreaker_wwise::convolution` documents the layout).
 - **Limiter.** A bus's Wwise Peak Limiter (`buses[].effects[].limiter`: `threshold_db`, `ratio`, `look_ahead_s`,
   `release_s`, `output_level_db`, `process_lfe`, `channel_link`; the master bus carries one) limits that bus's mix.
-  An effect with `bypass` is not applied.
+  Its parameter block has no attack: the look-ahead is the time it has to reach a peak's gain, so its output stays
+  within `threshold * (peak / threshold)^(1 / ratio)`. An effect with `bypass` is not applied; an effect with
+  `state_bypass` is on or off by the game's state.
+- **Effects in slot order.** A bus runs its effects by `slot`. A Parametric EQ's bands take their parameters from
+  `eq`, changed by the slot's `rtpc` curves at the RTPC values (Wwise Parametric EQ parameter ids, as the banks'
+  curves show them: band b's gain `5b+1` (dB), frequency `5b+2` (log10 Hz), Q `5b+3`, on `5b+4`; the output level
+  15). A Meter measures the bus's signal at its slot (peak or RMS), follows it with its attack, hold and release
+  within `min_db`..`max_db`, and writes the value to `game_parameter`.
+- **Side-chains.** A game parameter a meter writes moves every curve on it: bus `rtpc` gain curves (`volume` on the
+  bus's input; `bus_volume`, `output_bus_volume`, `make_up_gain` on its output) and effect parameters. Its `rtpcs[]`
+  default is its value while no meter writes it (the curves' values there are in `rtpc_default_db`).
 - **Rooms.** `rooms[].environment` is the room class's `AudioPropagationParams.audioEnvironment` when set; else the
   `AudioEnvironment` record whose `interiority` range holds the class's `physicalEncapsulationValue` and whose `size`
   range holds `size_m` = cube root of the room's volume (the nearest range when between ranges). The size metric is
@@ -1710,6 +1727,7 @@ Rules a player follows (all values are the game's; nothing is chosen per asset):
   says which rooms are inferred (and `candidates` lists the records their encapsulation allows).
 
 Open items (not derivable from the data; not applied): the engine's room-size metric (above), the mapping of Wwise LPF/HPF amounts (0..100) to cut-off frequencies,
-spread and focus, bus EQ / compressor / meter effects, ducking, state groups (the game sets states at run
-time), LFO modulators, switch values other than the default, and the two zero words at offset 40 of an
+spread and focus (bus `lpf` / `hpf` / `output_bus_lpf` / `output_bus_hpf` curves are exported but have no cut-off
+mapping), compressor and RoomVerb / delay effects, bus-to-bus ducks (`ducks`; none target the C2 / hangar chains),
+state groups (the game sets states at run time; `state_bypass` names those that switch an effect), LFO modulators, switch values other than the default, and the two zero words at offset 40 of an
 impulse-response header.

@@ -169,21 +169,31 @@ impl<'l, 'p> ManifestBuilder<'l, 'p> {
         }
         let mut rtpcs = BTreeMap::new();
         let defaults = init.as_ref().map(|b| b.game_parameter_defaults.clone()).unwrap_or_default();
-        let mut note_rtpc = |name: &str| {
+        // An RTPC the ATL names, or one it does not (listed under its id in hex, as the curves name it) with the Wwise
+        // game parameter's default.
+        let mut note_rtpc_id = |name: &str, id: u32| {
             if let Some(a) = lib.atl.rtpc(name) {
                 let wwise_default = defaults.get(&crate::fnv1_hash(&a.wwise_name)).copied();
                 rtpcs.entry(name.to_owned()).or_insert(RtpcOut { wwise_name: a.wwise_name.clone(), min: a.min, max: a.max, default: a.default, wwise_default });
+            } else if let Some(&d) = defaults.get(&id) {
+                rtpcs.entry(name.to_owned()).or_insert(RtpcOut { wwise_name: name.to_owned(), min: None, max: None, default: None, wwise_default: Some(d) });
             }
         };
         for node in &r.out.nodes {
-            node.props.rtpc.iter().for_each(|c| note_rtpc(&c.rtpc));
+            node.props.rtpc.iter().for_each(|c| note_rtpc_id(&c.rtpc, c.rtpc_id));
         }
         for t in r.out.triggers.values() {
-            t.play.iter().flat_map(|p| &p.context.rtpc).for_each(|c| note_rtpc(&c.rtpc));
-            t.rtpc_dependees.iter().for_each(|d| note_rtpc(d));
+            t.play.iter().flat_map(|p| &p.context.rtpc).for_each(|c| note_rtpc_id(&c.rtpc, c.rtpc_id));
+            t.rtpc_dependees.iter().for_each(|d| note_rtpc_id(d, 0));
         }
         for b in buses.values() {
-            b.rtpc.iter().for_each(|c| note_rtpc(&c.rtpc));
+            b.rtpc.iter().for_each(|c| note_rtpc_id(&c.rtpc, c.rtpc_id));
+            for e in &b.effects {
+                e.rtpc.iter().for_each(|c| note_rtpc_id(&c.rtpc, c.rtpc_id));
+                if let Some(m) = &e.meter {
+                    note_rtpc_id(&m.game_parameter, m.game_parameter_id);
+                }
+            }
         }
 
         // Media: read and convert in parallel (the conversion validates each stream by decoding it once).

@@ -373,6 +373,11 @@ impl Hierarchy {
         self.objects.len()
     }
 
+    /// Every object, in no particular order.
+    pub fn objects(&self) -> impl Iterator<Item = &HircObject> {
+        self.objects.values()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.objects.is_empty()
     }

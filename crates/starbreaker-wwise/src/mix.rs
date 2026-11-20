@@ -2,8 +2,9 @@
 //!
 //! - [`bus_chain`] / [`BusOut`]: a bus, its parent, its own voice volume (`Volume`, applied to each voice routed
 //!   through it), bus volume (`BusVolume`, applied to the bus mix), make-up gain, RTPC curves (and their value at the
-//!   RTPCs' ATL defaults) and effect slots (a Convolution Reverb slot carries its parameters and IR media id; Gain, Parametric EQ and
-//!   Peak Limiter slots their parameters).
+//!   RTPCs' defaults: ATL, else the Wwise game parameter's) and effect slots (a Convolution Reverb slot carries its parameters and IR media id; Gain, Parametric EQ and
+//!   Peak Limiter slots their parameters; a Meter slot its ballistics and the game parameter it writes; every slot the
+//!   RTPC curves on its own effect parameters).
 //! - [`AttenuationOut`]: the curves of an attenuation object by slot.
 //! - [`evaluate`]: a Wwise curve at `x`, every `AkCurveInterpolation` shape (see the function).
 
@@ -90,6 +91,64 @@ pub struct EffectOut {
     /// Wwise Peak Limiter (`CAkPeakLimiterFXParams`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limiter: Option<PeakLimiter>,
+    /// Wwise Meter (`CAkMeterFXParams`): measures the bus and writes a game parameter (a side-chain source).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub meter: Option<Meter>,
+    /// RTPC curves on the effect's own parameters (`param` is `fx_param_<plugin parameter id>`; the id's meaning is
+    /// the plugin's).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub rtpc: Vec<RtpcCurve>,
+    /// The bus's state groups that bypass this slot in some of their states (`BypassFX` 0x30 of the slot, the slot
+    /// number in the high byte, or `BypassAllFX` 0x31): the slot is on or off depending on the game's state.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub state_bypass: Vec<StateBypass>,
+}
+
+/// A state group and the states (ids) in which it bypasses an effect slot.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct StateBypass {
+    pub group: u32,
+    pub states: Vec<u32>,
+}
+
+/// A Wwise Meter (`CAkMeterFXParams`, bank v154, 28 bytes: attack s, release s, min dB, max dB, hold s, infinite hold,
+/// mode, scope, apply downstream volume, game parameter id).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct Meter {
+    pub attack_s: f32,
+    pub release_s: f32,
+    pub min_db: f32,
+    pub max_db: f32,
+    pub hold_s: f32,
+    pub infinite_hold: bool,
+    /// `peak` or `rms` (`AkMeterMode`).
+    pub mode: &'static str,
+    /// `global` or `game_object` (`AkMeterScope`).
+    pub scope: &'static str,
+    pub apply_downstream_volume: bool,
+    /// The written game parameter's ATL name (its id in hex when the ATL does not name it).
+    pub game_parameter: String,
+    pub game_parameter_id: u32,
+}
+
+impl Meter {
+    pub fn parse(b: &[u8], name: impl Fn(u32) -> String) -> Option<Self> {
+        let f = |o: usize| b.get(o..o + 4).map(|x| f32::from_le_bytes(x.try_into().unwrap()));
+        let id = b.get(24..28).map(|x| u32::from_le_bytes(x.try_into().unwrap()))?;
+        Some(Self {
+            attack_s: f(0)?,
+            release_s: f(4)?,
+            min_db: f(8)?,
+            max_db: f(12)?,
+            hold_s: f(16)?,
+            infinite_hold: *b.get(20)? != 0,
+            mode: if *b.get(21)? == 1 { "rms" } else { "peak" },
+            scope: if *b.get(22)? == 1 { "game_object" } else { "global" },
+            apply_downstream_volume: *b.get(23)? != 0,
+            game_parameter: name(id),
+            game_parameter_id: id,
+        })
+    }
 }
 
 /// A Wwise Peak Limiter (`CAkPeakLimiterFXParams`: threshold dB, ratio, look-ahead s, release s, output level dB,
@@ -120,11 +179,12 @@ impl PeakLimiter {
     }
 }
 
-/// A Wwise Parametric EQ (`CAkParameterEQFXParams`, three bands in v154).
+/// A Wwise Parametric EQ (`CAkParameterEQFXParams`, three bands in v154, 56 bytes: bands, output level, process LFE).
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct ParametricEq {
     pub bands: Vec<EqBand>,
     pub output_level_db: f32,
+    pub process_lfe: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -152,7 +212,7 @@ impl ParametricEq {
                 on: *b.get(o + 16)? != 0,
             });
         }
-        Some(Self { bands, output_level_db: f(51)? })
+        Some(Self { bands, output_level_db: f(51)?, process_lfe: *b.get(55)? != 0 })
     }
 }
 
@@ -173,11 +233,11 @@ pub struct BusOut {
     pub pitch_cents: f32,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub rtpc: Vec<RtpcCurve>,
-    /// The gain RTPC curves (volume, bus volume, output-bus volume, make-up gain) evaluated at their RTPCs' ATL
-    /// defaults (dB, summed).
+    /// The gain RTPC curves (volume, bus volume, output-bus volume, make-up gain) evaluated at their RTPCs' defaults
+    /// ([`rtpc_default`]: ATL, else the Wwise game parameter's; dB, summed).
     #[serde(skip_serializing_if = "is_zero")]
     pub rtpc_default_db: f32,
-    /// RTPCs with a volume curve on this bus but no ATL default (not applied).
+    /// RTPCs with a volume curve on this bus but no default (not applied).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub rtpc_without_default: Vec<String>,
     /// State groups with property offsets on this bus (applied only while the game sets that state; not modelled).
@@ -230,7 +290,7 @@ pub fn bus_chain(resolver: &Resolver<'_, '_>, bus: u32) -> Vec<(u32, BusOut)> {
             if !is_gain_param(&c.param) {
                 continue;
             }
-            match resolver.lib.atl.rtpc(&c.rtpc).and_then(|r| r.default) {
+            match rtpc_default(resolver, &c.rtpc, c.rtpc_id) {
                 Some(x) if c.rtpc_type == 0 => rtpc_default_db += to_db(c.scaling, evaluate(&c.points, x)),
                 _ => rtpc_without_default.push(c.rtpc.clone()),
             }
@@ -251,11 +311,19 @@ pub fn bus_chain(resolver: &Resolver<'_, '_>, bus: u32) -> Vec<(u32, BusOut)> {
                     gain_db: None,
                     eq: None,
                     limiter: None,
+                    meter: None,
+                    rtpc: Vec::new(),
+                    state_bypass: state_bypass(&object.state_chunk, fx.fx_index),
                 };
                 if let Some(HircObject::FxShareSet(f) | HircObject::FxCustom(f)) = resolver.lib.object(&banks, fx.fx_id) {
                     out.plugin = format!("{:#010x}", f.fx_id);
                     out.kind = effect_kind(f.fx_id);
                     let params = &f.plugin_params;
+                    // Effect RTPCs drive the plugin's own parameter ids, not the node property table.
+                    out.rtpc = resolver.curves(&f.rtpc);
+                    for (c, raw) in out.rtpc.iter_mut().zip(&f.rtpc.curves) {
+                        c.param = format!("fx_param_{}", raw.param_id);
+                    }
                     match f.fx_id {
                         0x007F_0003 => {
                             out.convolution = ConvolutionParams::parse(params);
@@ -264,6 +332,7 @@ pub fn bus_chain(resolver: &Resolver<'_, '_>, bus: u32) -> Vec<(u32, BusOut)> {
                         0x008B_0003 => out.gain_db = params.get(0..4).map(|b| f32::from_le_bytes(b.try_into().unwrap())),
                         0x0069_0003 => out.eq = ParametricEq::parse(params),
                         0x006E_0003 => out.limiter = PeakLimiter::parse(params),
+                        0x0081_0003 => out.meter = Meter::parse(params, |id| resolver.rtpc_name(id)),
                         _ => {}
                     }
                 }
@@ -291,6 +360,29 @@ pub fn bus_chain(resolver: &Resolver<'_, '_>, bus: u32) -> Vec<(u32, BusOut)> {
         current = object.parent();
     }
     out
+}
+
+/// The value of a game parameter until the game sets it: its ATL default, else the Wwise game parameter's default
+/// (`Init.bnk` STMG) — one resolver for the static bus levels and the manifest's `rtpcs`.
+pub fn rtpc_default(resolver: &Resolver<'_, '_>, name: &str, id: u32) -> Option<f32> {
+    resolver.lib.atl.rtpc(name).and_then(|r| r.default).or_else(|| resolver.lib.init_bank().and_then(|b| b.game_parameter_defaults.get(&id).copied()))
+}
+
+/// The state groups of a bus that bypass effect slot `slot` in some state, with those states.
+fn state_bypass(chunk: &crate::hirc::rtpc::StateChunk, slot: u8) -> Vec<StateBypass> {
+    chunk
+        .state_groups
+        .iter()
+        .filter_map(|g| {
+            let states: Vec<u32> = g
+                .states
+                .iter()
+                .filter(|s| s.properties.props.iter().any(|&(id, v)| v != 0.0 && (id == 0x31 || id == 0x30 | (u16::from(slot) << 8))))
+                .map(|s| s.state_id)
+                .collect();
+            (!states.is_empty()).then_some(StateBypass { group: g.group_id, states })
+        })
+        .collect()
 }
 
 /// Properties whose values are gains in dB (they add along buses and nodes).

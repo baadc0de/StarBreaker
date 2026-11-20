@@ -291,3 +291,80 @@ pub fn peak_limiter_share_set(id: u32, threshold_db: f32, ratio: f32, look_ahead
     d.extend_from_slice(&0u16.to_le_bytes()); // state property values
     HircEntry { type_id: 16, object_id: id, data: d }
 }
+
+/// A Wwise Meter share set (type 16, v154 `CAkMeterFXParams`): attack, release, min, max, hold (s / dB), infinite
+/// hold, mode (0 peak, 1 RMS), scope (0 global, 1 game object), apply downstream volume, the game parameter it writes.
+#[allow(clippy::too_many_arguments)]
+pub fn meter_share_set(id: u32, attack_s: f32, release_s: f32, min_db: f32, max_db: f32, hold_s: f32, mode: u8, scope: u8, downstream: bool, game_param: u32) -> HircEntry {
+    let mut params = Vec::new();
+    for v in [attack_s, release_s, min_db, max_db, hold_s] {
+        params.extend_from_slice(&v.to_le_bytes());
+    }
+    params.extend_from_slice(&[0, mode, scope, downstream as u8]);
+    params.extend_from_slice(&game_param.to_le_bytes());
+    fx_share_set(id, 0x0081_0003, params, &[])
+}
+
+/// A Wwise Parametric EQ share set (type 16, three bands `(filter type, gain dB, frequency Hz, Q, on)` and an output
+/// level), with RTPC curves `(rtpc id, effect parameter id, points)` on its parameters.
+pub fn parametric_eq_share_set(id: u32, bands: [(u32, f32, f32, f32, bool); 3], rtpc: &[(u32, u32, Vec<(f32, f32, u32)>)]) -> HircEntry {
+    let mut params = Vec::new();
+    for (kind, gain, freq, q, on) in bands {
+        params.extend_from_slice(&kind.to_le_bytes());
+        for v in [gain, freq, q] {
+            params.extend_from_slice(&v.to_le_bytes());
+        }
+        params.push(on as u8);
+    }
+    params.extend_from_slice(&0f32.to_le_bytes());
+    params.push(0);
+    fx_share_set(id, 0x0069_0003, params, rtpc)
+}
+
+/// An effect share set (type 16) of `plugin` with raw parameters and RTPC curves on its parameters (dB-unscaled).
+pub fn fx_share_set(id: u32, plugin: u32, params: Vec<u8>, rtpc: &[(u32, u32, Vec<(f32, f32, u32)>)]) -> HircEntry {
+    let mut d = Vec::new();
+    d.extend_from_slice(&plugin.to_le_bytes());
+    d.extend_from_slice(&(params.len() as u32).to_le_bytes());
+    d.extend(params);
+    d.push(0); // no media
+    d.extend_from_slice(&(rtpc.len() as u16).to_le_bytes());
+    for (rtpc_id, param, points) in rtpc {
+        d.extend_from_slice(&rtpc_id.to_le_bytes());
+        d.extend_from_slice(&[0, 0]); // game parameter, accumulation
+        assert!(*param < 0x80, "one-byte VLQ parameter ids only");
+        d.push(*param as u8);
+        d.extend_from_slice(&0u32.to_le_bytes());
+        d.push(0); // scaling none
+        d.extend_from_slice(&(points.len() as u16).to_le_bytes());
+        for (x, y, i) in points {
+            d.extend_from_slice(&x.to_le_bytes());
+            d.extend_from_slice(&y.to_le_bytes());
+            d.extend_from_slice(&i.to_le_bytes());
+        }
+    }
+    d.extend_from_slice(&[0, 0]); // state chunk
+    d.extend_from_slice(&0u16.to_le_bytes()); // state property values
+    HircEntry { type_id: 16, object_id: id, data: d }
+}
+
+/// `entry` (a bus, whose data ends with an empty state chunk) with one state group: `(state id, [(prop id, value)])`.
+pub fn with_state_group(mut entry: HircEntry, group: u32, states: &[(u32, &[(u16, f32)])]) -> HircEntry {
+    entry.data.truncate(entry.data.len() - 2);
+    entry.data.push(0); // no state props
+    entry.data.push(1); // one group
+    entry.data.extend_from_slice(&group.to_le_bytes());
+    entry.data.push(0); // sync type
+    entry.data.push(states.len() as u8);
+    for (state, props) in states {
+        entry.data.extend_from_slice(&state.to_le_bytes());
+        entry.data.extend_from_slice(&(props.len() as u16).to_le_bytes());
+        for (id, _) in props.iter() {
+            entry.data.extend_from_slice(&id.to_le_bytes());
+        }
+        for (_, v) in props.iter() {
+            entry.data.extend_from_slice(&v.to_le_bytes());
+        }
+    }
+    entry
+}

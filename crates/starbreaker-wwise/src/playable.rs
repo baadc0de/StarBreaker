@@ -32,6 +32,9 @@ pub struct RtpcCurve {
     pub rtpc_id: u32,
     /// 0 game parameter, 1 MIDI, 2 switch, 3 state, 4 modulator (`AkGameSyncType`).
     pub rtpc_type: u8,
+    /// `AkRtpcAccum` (v128+): 0 none, 1 exclusive (the curve replaces the value), 2 additive, 3 multiply, 4 boolean.
+    #[serde(skip_serializing_if = "is_zero_u8")]
+    pub accum: u8,
     /// The driven property (`prop_id::rtpc_param_name`), or `param_<id>`.
     pub param: String,
     /// `AkCurveScaling`: 0 none, 2 dB, 3 log, 4 dB-to-linear.
@@ -482,6 +485,7 @@ impl<'l, 'p> Resolver<'l, 'p> {
                 rtpc: self.rtpc_name(c.rtpc_id),
                 rtpc_id: c.rtpc_id,
                 rtpc_type: c.rtpc_type,
+                accum: c.rtpc_accum,
                 param: prop_id::rtpc_param_name(c.param_id).map_or_else(|| format!("param_{}", c.param_id), str::to_owned),
                 scaling: c.scaling,
                 points: c.points.iter().map(|p| (p.from, p.to, p.interp)).collect(),
@@ -592,3 +596,7 @@ fn source_plugin_name(plugin_id: u32) -> String {
 #[cfg(test)]
 #[path = "playable_tests.rs"]
 mod tests;
+
+fn is_zero_u8(v: &u8) -> bool {
+    *v == 0
+}
