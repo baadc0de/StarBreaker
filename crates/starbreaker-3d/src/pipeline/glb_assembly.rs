@@ -247,6 +247,8 @@ pub fn assemble_glb_with_loadout_with_progress(
                         .to_string(),
                     entity_category: None,
                     attach_def_type: None,
+                    door: None,
+                    item_port_links: Vec::new(),
                     parent_node_name: bone_name.clone(),
                     parent_entity_name: resolved.entity_name.clone(),
                     no_rotation: false,

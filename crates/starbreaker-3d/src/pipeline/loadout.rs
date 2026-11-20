@@ -125,10 +125,12 @@ pub fn resolve_loadout_meshes(
     let invisible_ports = load_invisible_ports(db, p4k, record);
     let port_selectors = load_vehicle_port_selectors(db, p4k, record);
 
+    // Loadouts given by an XML file (`SItemPortLoadoutXMLParams`) are read from the archive here.
+    let root_children = super::xml_loadouts::expanded_children(db, p4k, tree);
     let mut children = resolve_children(
         db,
         p4k,
-        &tree.root.children,
+        &root_children,
         opts,
         &invisible_ports,
         &port_selectors,

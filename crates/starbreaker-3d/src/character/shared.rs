@@ -266,6 +266,8 @@ pub(crate) fn part_payload(
         entity_name: name,
         entity_category: None,
         attach_def_type: None,
+        door: None,
+        item_port_links: Vec::new(),
         parent_node_name: String::new(),
         parent_entity_name: root.to_owned(),
         no_rotation: false,

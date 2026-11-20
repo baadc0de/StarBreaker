@@ -190,6 +190,14 @@ pub struct UiIrNode {
     /// serialized IR so it does not perturb snapshot/freeze hashes.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub colour_overlay_enabled: bool,
+    /// The owner interactions a left click on this node fires: the `name`s of
+    /// its `interactions.onLeftClick[]` `BuildingBlocks_TriggerURL` actions,
+    /// when the node can be interacted with (`canInteract`, not `disabled`).
+    /// In-memory only (`serde(skip)`), for the exporter's click regions
+    /// ([`crate::pipeline::click_targets`]); never serialized, so IR snapshots /
+    /// freeze hashes are unaffected.
+    #[serde(skip)]
+    pub left_click_triggers: Vec<String>,
 }
 
 impl UiIrNode {
@@ -1710,6 +1718,7 @@ fn build_ui_ir_nodes(
                             .and_then(|v| v.as_bool())
                     })
                     .unwrap_or(false),
+            left_click_triggers: left_click_triggers(&node.raw),
         });
     }
 
@@ -1718,6 +1727,28 @@ fn build_ui_ir_nodes(
     apply_placeholder_black_icon_inheritance(&mut nodes, scene, is_hud_canvas);
 
     nodes
+}
+
+/// The `BuildingBlocks_TriggerURL` names of a widget's `interactions.onLeftClick[]`, in authored order; empty when the
+/// widget cannot be interacted with (`canInteract` false or absent, or `disabled`).
+pub(crate) fn left_click_triggers(raw: &serde_json::Value) -> Vec<String> {
+    let Some(interactions) = raw.get("interactions") else {
+        return Vec::new();
+    };
+    let can_interact = interactions.get("canInteract").and_then(|v| v.as_bool()).unwrap_or(false);
+    let disabled = interactions.get("disabled").and_then(|v| v.as_bool()).unwrap_or(false);
+    if !can_interact || disabled {
+        return Vec::new();
+    }
+    interactions
+        .get("onLeftClick")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .filter(|action| action.get("_Type_").and_then(|t| t.as_str()) == Some("BuildingBlocks_TriggerURL"))
+        .filter_map(|action| action.get("name").and_then(|n| n.as_str()).filter(|n| !n.is_empty()))
+        .map(str::to_owned)
+        .collect()
 }
 
 /// A cascade-applied literal `FillColor` of opaque pure black (`{r:0,g:0,b:0}`)

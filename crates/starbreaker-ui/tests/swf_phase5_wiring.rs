@@ -85,6 +85,7 @@ fn minimal_node(
         circle_fill_colour_token: None,
         style_provenance: None,
         colour_overlay_enabled: false,
+        left_click_triggers: Vec::new(),
         segmented_fill: None,
         polygon: None,
         border: None,

@@ -1000,6 +1000,8 @@ mod tests {
             entity_name: entity_name.into(),
             entity_category: None,
             attach_def_type: None,
+            door: None,
+            item_port_links: Vec::new(),
             parent_node_name: String::new(),
             parent_entity_name: String::new(),
             no_rotation: false,

@@ -142,21 +142,23 @@ fn run_render(
             continue;
         }
 
-        // The default render, then the owner states the export rendered (`state_images`), as the export renders them.
-        let states: Vec<Option<(&str, &str)>> = std::iter::once(None)
-            .chain(binding.state_images.iter().map(|s| Some((s.state_type.as_str(), s.state.as_str()))))
+        // The default render, then the owner states the export rendered (`state_images`: one state or a pair), as the
+        // export renders them.
+        let states: Vec<Vec<(&str, &str)>> = std::iter::once(Vec::new())
+            .chain(binding.state_images.iter().map(state_image_pins))
             .collect();
         for state in states {
-        match starbreaker_3d::ui_pipeline::render_ui_binding_png(&binding, state, &db, &p4k, texture_mip, manufacturer_id.as_deref(), &loc_data, &ship_data, None, root_entity_name.as_deref()) {
-            Ok(png_bytes) => {
-                let file_name = png_name_for_binding(binding, state, texture_mip);
+        match starbreaker_3d::ui_pipeline::render_ui_binding(&binding, &state, &db, &p4k, texture_mip, manufacturer_id.as_deref(), &loc_data, &ship_data, None, root_entity_name.as_deref()) {
+            Ok(render) => {
+                let png_bytes = render.png;
+                let file_name = png_name_for_binding(binding, &state, texture_mip);
                 let dest = out_dir.join(&file_name);
                 std::fs::write(&dest, &png_bytes)?;
                 eprintln!("  wrote  {}", dest.display());
                 if let Some(dump_ir_dir) = dump_ir_dir {
                     let ir_json = starbreaker_3d::ui_pipeline::compile_ui_binding_ir_json(
                         binding,
-                        state,
+                        &state,
                         &db,
                         &p4k,
                         texture_mip,
@@ -295,6 +297,8 @@ fn parse_ui_binding(v: &Value) -> Option<UiBinding> {
         user_variables: obj.get("user_variables").cloned().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default(),
         state_types: obj.get("state_types").cloned().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default(),
         state_images: obj.get("state_images").cloned().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default(),
+        image_size_px: obj.get("image_size_px").cloned().and_then(|v| serde_json::from_value(v).ok()),
+        buttons: obj.get("buttons").cloned().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default(),
     })
 }
 
@@ -302,16 +306,25 @@ fn parse_ui_binding(v: &Value) -> Option<UiBinding> {
 /// one (e.g. the medical bed) fall back to the human-readable content/canvas
 /// record name before the GUID, so replay outputs are findable without a
 /// content-match hunt (ledger item 31).
-fn png_name_for_binding(binding: &UiBinding, state: Option<(&str, &str)>, mip: u32) -> String {
+/// The states a `state_images[]` entry pins: its `states`, else (a scene written before pairs) its `state_type`/`state`.
+fn state_image_pins(image: &starbreaker_3d::types::UiStateImage) -> Vec<(&str, &str)> {
+    if !image.states.is_empty() {
+        return image.states.iter().map(|p| (p.state_type.as_str(), p.state.as_str())).collect();
+    }
+    image.state_type.as_deref().zip(image.state.as_deref()).into_iter().collect()
+}
+
+fn png_name_for_binding(binding: &UiBinding, state: &[(&str, &str)], mip: u32) -> String {
     // An exported operating panel's render carries per-instance values (aspect, user variables, state): its exported
     // file stem is its identity, so two placements of one canvas do not replay onto one file.
-    let exported = match state {
-        Some((state_type, state)) => binding
+    let exported = if state.is_empty() {
+        binding.generated_image_path.as_deref()
+    } else {
+        binding
             .state_images
             .iter()
-            .find(|s| s.state_type == state_type && s.state == state)
-            .map(|s| s.generated_image_path.as_str()),
-        None => binding.generated_image_path.as_deref(),
+            .find(|s| state_image_pins(s) == state)
+            .map(|s| s.generated_image_path.as_str())
     };
     if !binding.user_variables.is_empty() || binding.ui_texture_aspect_w_over_h.is_some() {
         if let Some(stem) = exported
@@ -333,13 +346,9 @@ fn png_name_for_binding(binding: &UiBinding, state: Option<(&str, &str)>, mip: u
         .chars()
         .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' { c } else { '_' })
         .collect();
-    match state {
-        Some((state_type, state)) => {
-            let clean = |s: &str| -> String { s.chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect() };
-            format!("{safe}__{}_{}_TEX{mip}.png", clean(state_type), clean(state))
-        }
-        None => format!("{safe}_TEX{mip}.png"),
-    }
+    let clean = |s: &str| -> String { s.chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect() };
+    let suffix: String = state.iter().map(|(state_type, state)| format!("__{}_{}", clean(state_type), clean(state))).collect();
+    format!("{safe}{suffix}_TEX{mip}.png")
 }
 
 #[cfg(test)]
@@ -358,16 +367,16 @@ mod tests {
     #[test]
     fn png_name_prefers_helper_then_content_record_name_then_guid() {
         let helper = binding_with(Some("Screen_Annunciator_L"), Some("BuildingBlocks_Canvas.X"), Some("guid-1"));
-        assert_eq!(png_name_for_binding(&helper, None, 0), "Screen_Annunciator_L_TEX0.png");
+        assert_eq!(png_name_for_binding(&helper, &[], 0), "Screen_Annunciator_L_TEX0.png");
 
         let content = binding_with(None, Some("BuildingBlocks_Canvas.I_Med_MedicalBed_A"), Some("guid-1"));
         assert_eq!(
-            png_name_for_binding(&content, None, 0),
+            png_name_for_binding(&content, &[], 0),
             "BuildingBlocks_Canvas.I_Med_MedicalBed_A_TEX0.png"
         );
 
         let guid_only = binding_with(None, None, Some("534bab84-299b"));
-        assert_eq!(png_name_for_binding(&guid_only, None, 0), "534bab84-299b_TEX0.png");
+        assert_eq!(png_name_for_binding(&guid_only, &[], 0), "534bab84-299b_TEX0.png");
     }
 
     /// Review fix: two placements of one canvas with different per-instance values replay to their exported stems.
@@ -377,14 +386,22 @@ mod tests {
         a.ui_texture_aspect_w_over_h = Some(0.5625);
         a.generated_image_path = Some("Data/UI/Generated/ship/x/y/door_aaaa.png".into());
         a.state_images.push(starbreaker_3d::types::UiStateImage {
-            state_type: "T".into(),
-            state: "S".into(),
+            state_type: Some("T".into()),
+            state: Some("S".into()),
+            states: Vec::new(),
             generated_image_path: "Data/UI/Generated/ship/x/y/door_aaaa__t_s.png".into(),
+        });
+        let pin = |t: &str, s: &str| starbreaker_3d::types::UiStatePin { state_type: t.into(), state: s.into() };
+        a.state_images.push(starbreaker_3d::types::UiStateImage {
+            states: vec![pin("T", "S"), pin("U", "V")],
+            generated_image_path: "Data/UI/Generated/ship/x/y/door_aaaa__t_s__u_v.png".into(),
+            ..Default::default()
         });
         let mut b = a.clone();
         b.generated_image_path = Some("Data/UI/Generated/ship/x/y/door_bbbb.png".into());
-        assert_eq!(png_name_for_binding(&a, None, 0), "door_aaaa_TEX0.png");
-        assert_eq!(png_name_for_binding(&b, None, 0), "door_bbbb_TEX0.png");
-        assert_eq!(png_name_for_binding(&a, Some(("T", "S")), 0), "door_aaaa__t_s_TEX0.png");
+        assert_eq!(png_name_for_binding(&a, &[], 0), "door_aaaa_TEX0.png");
+        assert_eq!(png_name_for_binding(&b, &[], 0), "door_bbbb_TEX0.png");
+        assert_eq!(png_name_for_binding(&a, &[("T", "S")], 0), "door_aaaa__t_s_TEX0.png");
+        assert_eq!(png_name_for_binding(&a, &[("T", "S"), ("U", "V")], 0), "door_aaaa__t_s__u_v_TEX0.png", "a pair replays to its stem");
     }
 }

@@ -2,8 +2,10 @@
 //!
 //! Sub-modules: `canvas_fetcher` — [`CanvasFetcher`] with O(1) name index (B2b);
 //! `p4k_fetchers` — P4K-backed [`SwfFetcher`] and [`AssetFetcher`]; `style_fetcher` —
-//! manufacturer style resolution. Exposes [`render_ui_binding_png`] and
-//! [`UiLocData`] as the call-sites for `decomposed.rs`.
+//! manufacturer style resolution. Exposes [`render_ui_binding`] (a render with its
+//! image size and buttons, [`UiRender`]), [`render_ui_binding_png`] and
+//! [`UiLocData`] as the call-sites for `decomposed.rs`. A render pins any number
+//! of owner states ([`ui_binding_values`]).
 
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -97,6 +99,7 @@ pub fn build_default_registry(
 /// Returns the PNG bytes on success, or a descriptive error string on failure.
 /// Callers should log the error and set `generated_image_path = None` rather
 /// than propagating.
+#[allow(clippy::too_many_arguments)]
 pub fn render_ui_binding_png(
     binding: &UiBinding,
     state: Option<(&str, &str)>,
@@ -109,9 +112,49 @@ pub fn render_ui_binding_png(
     defaults_registry: Option<&starbreaker_ui::DefaultValueRegistry>,
     root_entity_name: Option<&str>,
 ) -> Result<Vec<u8>, String> {
+    render_ui_binding(
+        binding,
+        state.as_slice(),
+        db,
+        p4k,
+        texture_mip,
+        root_manufacturer_id,
+        loc_data,
+        ship_data,
+        defaults_registry,
+        root_entity_name,
+    )
+    .map(|render| render.png)
+}
+
+/// One render of a binding: the PNG, its pixel size and the default render's clickable regions.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UiRender {
+    pub png: Vec<u8>,
+    /// `[width, height]` of `png`.
+    pub size_px: [u32; 2],
+    /// The active nodes whose left click fires an owner interaction, in the image's pixels.
+    pub buttons: Vec<crate::types::UiButton>,
+}
+
+/// Render `binding` with the owner `states` pinned (every other state type at its default; none: the default render)
+/// to a [`UiRender`]. See [`render_ui_binding_png`].
+#[allow(clippy::too_many_arguments)]
+pub fn render_ui_binding(
+    binding: &UiBinding,
+    states: &[(&str, &str)],
+    db: &Database<'_>,
+    p4k: &MappedP4k,
+    texture_mip: u32,
+    root_manufacturer_id: Option<&str>,
+    loc_data: &UiLocData,
+    ship_data: &UiShipData,
+    defaults_registry: Option<&starbreaker_ui::DefaultValueRegistry>,
+    root_entity_name: Option<&str>,
+) -> Result<UiRender, String> {
     let t_ui = std::env::var("SB_UI_TIMING").ok().map(|_| std::time::Instant::now());
     let canvas_fetcher = DatacoreCanvasFetcher::new(db);
-    let binding_values = ui_binding_values(binding, state, &loc_data.map);
+    let binding_values = ui_binding_values(binding, states, &loc_data.map);
     let hologram_fetcher = P4kHologramFetcher {
         p4k,
         db,
@@ -179,13 +222,28 @@ pub fn render_ui_binding_png(
         hologram_fetcher: Some(&hologram_fetcher),
     };
     let _ = texture_mip; // size is fixed per binding_kind; mip is applied at texture level
-    let result = match defaults_registry {
-        Some(registry) => {
-            starbreaker_ui::pipeline::render_for_binding_with_registry(&inputs, registry)
+    let owned_registry;
+    let registry = match defaults_registry {
+        Some(registry) => registry,
+        None => {
+            owned_registry = starbreaker_ui::DefaultValueRegistry::with_pipeline_defaults_and_derived_values(
+                inputs.localization_map.clone(),
+                inputs.derived_values.as_ref(),
+            );
+            &owned_registry
         }
-        None => starbreaker_ui::pipeline::render_for_binding(&inputs),
-    }
-    .map_err(|e| e.to_string());
+    };
+    let result = starbreaker_ui::pipeline::render_for_binding_with_registry_output(&inputs, registry)
+        .map(|output| UiRender {
+            png: output.png,
+            size_px: [output.size_px.0, output.size_px.1],
+            buttons: output
+                .click_targets
+                .into_iter()
+                .map(|t| crate::types::UiButton { node: t.node, interaction: t.trigger, rect_px: t.rect_px })
+                .collect(),
+        })
+        .map_err(|e| e.to_string());
     if let Some(t) = t_ui {
         log::info!(
             "[timing][ui] binding={} kind={} total={:.3}s",
@@ -201,7 +259,7 @@ pub fn render_ui_binding_png(
 /// inputs as [`render_ui_binding_png`].
 pub fn compile_ui_binding_ir_json(
     binding: &UiBinding,
-    state: Option<(&str, &str)>,
+    states: &[(&str, &str)],
     db: &Database<'_>,
     p4k: &MappedP4k,
     texture_mip: u32,
@@ -210,7 +268,7 @@ pub fn compile_ui_binding_ir_json(
     ship_data: &UiShipData,
 ) -> Result<String, String> {
     let canvas_fetcher = DatacoreCanvasFetcher::new(db);
-    let binding_values = ui_binding_values(binding, state, &loc_data.map);
+    let binding_values = ui_binding_values(binding, states, &loc_data.map);
     let view = UiBindingView {
         canvas_guid: binding.canvas_guid.as_deref(),
         content_canvas_guid: binding.content_canvas_guid.as_deref(),
@@ -336,10 +394,10 @@ pub fn root_manufacturer_id(root_entity_name: &str) -> Option<String> {
 /// The engine values `binding`'s owner pushes into its canvas for one render (`UiBindingView::binding_values`): its
 /// user variables by name (a localization key localized through `loc`, as the engine pushes the string; an unknown
 /// key stays the key) and every state type's `state.<type>.<state>` booleans: each type in its default state, except
-/// the type `state = Some((type, state))` names, in that state. `None`: the default render (every type at rest).
+/// the types `states` name (`(type, state)` pairs), in those states. Empty: the default render (every type at rest).
 pub(crate) fn ui_binding_values(
     binding: &UiBinding,
-    state: Option<(&str, &str)>,
+    states: &[(&str, &str)],
     loc: &HashMap<String, String>,
 ) -> Vec<(String, starbreaker_ui::canvas::Value)> {
     use crate::types::UiUserValue;
@@ -362,13 +420,14 @@ pub(crate) fn ui_binding_values(
             (variable.name.clone(), value)
         })
         .collect();
-    // Every state type sits in its default state, except the one `state` names: the engine pushes one boolean per
+    // Every state type sits in its default state, except those `states` name: the engine pushes one boolean per
     // state, the current one true (a door pad at rest is DoorClosed, DoorUnlocked, PowerNormal, ...).
     for ty in &binding.state_types {
-        let active = match state {
-            Some((state_type, state)) if state_type == ty.name => state,
-            _ => ty.default_state.as_str(),
-        };
+        let active = states
+            .iter()
+            .find(|(state_type, _)| *state_type == ty.name)
+            .map(|(_, state)| *state)
+            .unwrap_or(ty.default_state.as_str());
         for name in &ty.states {
             values.push((format!("state.{}.{}", ty.name, name), Value::Bool(name == active)));
         }

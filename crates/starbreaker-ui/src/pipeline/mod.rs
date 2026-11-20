@@ -1,6 +1,8 @@
 //! High-level rendering pipeline entry points.
 //!
 //! Key entry points: [`compile_ir_for_binding`] (canvas → UI IR), [`render_for_binding`] (→ PNG).
+//! [`render_for_binding_with_registry_output`] adds the image size and its click regions ([`click_targets`]: the
+//! active nodes whose left click triggers an owner interaction), for the exporter.
 //! Phase 6: for `binding_kind == "mfd"` with distinct frame/content canvases, `compile_ir_for_binding`
 //! uses the frame canvas and post-processes: patches `base_Root` alpha=0.0 → 1.0 and injects
 //! `screen_name_loc_key` into `text_ScreenName` nodes.
@@ -742,6 +744,90 @@ pub fn render_for_binding_ir_with(
     inputs: &PipelineInputs<'_>,
     defaults: &DefaultValueRegistry,
 ) -> Result<Vec<u8>, UiError> {
+    render_ir_document_with(inputs, defaults).map(|(png, _)| png)
+}
+
+/// A clickable region of a rendered screen (see [`click_targets`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct UiClickTarget {
+    /// The canvas node's `name`.
+    pub node: String,
+    /// The owner interaction the click fires (`BuildingBlocks_TriggerURL.name`).
+    pub trigger: String,
+    /// The node's laid-out rectangle `[x, y, w, h]` in the rendered image's pixels.
+    pub rect_px: [f32; 4],
+}
+
+/// A render with what the exporter publishes beside the PNG: its pixel size and click regions.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UiRenderWithClicks {
+    pub png: Vec<u8>,
+    /// `(width, height)` of `png`.
+    pub size_px: (u32, u32),
+    pub click_targets: Vec<UiClickTarget>,
+}
+
+/// The click regions of an IR document, in node order: every node with left-click triggers
+/// ([`UiIrNode::left_click_triggers`]) that is active with all its ancestors, one region per trigger, its computed rect
+/// scaled from the IR target to `image_size` (the same space when they agree).
+pub fn click_targets(ir: &UiIrDocument, image_size: (u32, u32)) -> Vec<UiClickTarget> {
+    let by_id: std::collections::HashMap<u32, &crate::ui_ir::UiIrNode> = ir.nodes.iter().map(|n| (n.id, n)).collect();
+    let active = |node: &crate::ui_ir::UiIrNode| {
+        let mut at = Some(node);
+        let mut hops = 0;
+        while let Some(n) = at {
+            if !n.is_active {
+                return false;
+            }
+            hops += 1;
+            if hops > by_id.len() {
+                return false; // a cyclic parent chain
+            }
+            at = n.parent_id.and_then(|p| by_id.get(&p).copied());
+        }
+        true
+    };
+    let sx = image_size.0 as f32 / ir.target_width.max(1) as f32;
+    let sy = image_size.1 as f32 / ir.target_height.max(1) as f32;
+    ir.nodes
+        .iter()
+        .filter(|n| !n.left_click_triggers.is_empty() && active(n))
+        .flat_map(|n| {
+            let r = &n.computed_rect;
+            n.left_click_triggers.iter().map(move |trigger| UiClickTarget {
+                node: n.name.clone(),
+                trigger: trigger.clone(),
+                rect_px: [r.x * sx, r.y * sy, r.w * sx, r.h * sy],
+            })
+        })
+        .collect()
+}
+
+/// `(width, height)` of a PNG from its `IHDR` chunk.
+fn png_size(png: &[u8]) -> Option<(u32, u32)> {
+    let header = png.get(16..24)?;
+    Some((
+        u32::from_be_bytes(header[0..4].try_into().ok()?),
+        u32::from_be_bytes(header[4..8].try_into().ok()?),
+    ))
+}
+
+/// Like [`render_for_binding_with_registry`], with the image's pixel size and click regions ([`click_targets`]).
+pub fn render_for_binding_with_registry_output(
+    inputs: &PipelineInputs<'_>,
+    defaults: &DefaultValueRegistry,
+) -> Result<UiRenderWithClicks, UiError> {
+    let (png, ir) = render_ir_document_with(inputs, defaults)?;
+    let size_px = png_size(&png).unwrap_or((ir.target_width, ir.target_height));
+    let click_targets = click_targets(&ir, size_px);
+    Ok(UiRenderWithClicks { png, size_px, click_targets })
+}
+
+/// Compile and render a binding: the PNG and the IR it was drawn from.
+fn render_ir_document_with(
+    inputs: &PipelineInputs<'_>,
+    defaults: &DefaultValueRegistry,
+) -> Result<(Vec<u8>, UiIrDocument), UiError> {
     let ir = timed("compile", || compile_ir_for_binding_with(inputs, defaults))?;
 
     let mut style = timed("style_load", || load_style_for_ir(&ir, inputs))?;
@@ -830,7 +916,8 @@ pub fn render_for_binding_ir_with(
             ),
         }
     })?;
-    timed("encode", || encode_png(&image))
+    let png = timed("encode", || encode_png(&image))?;
+    Ok((png, ir))
 }
 
 /// Main entrypoint for rendering a UI binding to PNG bytes.

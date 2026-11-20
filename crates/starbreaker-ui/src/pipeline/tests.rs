@@ -120,3 +120,62 @@ fn texture_aspect_target_keeps_the_canvas_pixel_area() {
     // Review fix: an extreme aspect (a nearly degenerate UV mapping) is refused, not rendered 60000 px wide.
     assert_eq!(texture_aspect_target_size((1920, 1080), 2000.0), None);
 }
+
+/// A minimal IR node (synthetic geometry) for the click-region rule.
+fn click_node(id: u32, parent: Option<u32>, active: bool, rect: [f32; 4], triggers: &[&str]) -> crate::ui_ir::UiIrNode {
+    let mut node: crate::ui_ir::UiIrNode = serde_json::from_value(serde_json::json!({
+        "id": id, "parent_id": parent, "children": [], "node_type": "widget_canvas", "name": format!("n{id}"),
+        "is_active": active, "layer": 0, "alpha": 1.0, "anchor": [0.0, 0.0], "pivot": [0.0, 0.0],
+        "authored_position": [0.0, 0.0],
+        "authored_size": [{"kind": "fixed", "value": rect[2]}, {"kind": "fixed", "value": rect[3]}],
+        "padding": [0.0, 0.0, 0.0, 0.0], "margin": [0.0, 0.0, 0.0, 0.0],
+        "computed_rect": {"x": rect[0], "y": rect[1], "w": rect[2], "h": rect[3]},
+        "style_tag_uuids": [], "resolved_style_tags": []
+    }))
+    .expect("a minimal IR node");
+    node.left_click_triggers = triggers.iter().map(|t| t.to_string()).collect();
+    node
+}
+
+/// scviewer C2 fixes: a click region is a node with left-click triggers whose whole ancestor chain is active, one per
+/// trigger, its rect scaled from the IR target to the image.
+#[test]
+fn click_targets_are_active_triggering_nodes_scaled_to_the_image() {
+    let mut ir: crate::ui_ir::UiIrDocument = serde_json::from_value(serde_json::json!({
+        "schema_version": 1, "canvas_guid": "g", "canvas_name": null, "target_width": 100, "target_height": 200,
+        "selected_style_source": null, "renderer_hint": "bb", "confidence": 100, "warnings": [],
+        "unresolved_references": [], "resolved_asset_refs": [], "missing_asset_refs": [], "nodes": []
+    }))
+    .unwrap();
+    ir.nodes = vec![
+        click_node(1, None, true, [0.0, 0.0, 100.0, 200.0], &[]),
+        click_node(2, Some(1), true, [10.0, 20.0, 30.0, 40.0], &["Go"]),
+        click_node(3, None, false, [0.0, 0.0, 100.0, 200.0], &[]),
+        click_node(4, Some(3), true, [10.0, 20.0, 30.0, 40.0], &["Hidden"]),
+        click_node(5, Some(1), true, [0.0, 0.0, 1.0, 1.0], &["A", "B"]),
+    ];
+    let targets = click_targets(&ir, (200, 400));
+    let summary: Vec<(&str, &str, [f32; 4])> =
+        targets.iter().map(|t| (t.node.as_str(), t.trigger.as_str(), t.rect_px)).collect();
+    assert_eq!(
+        summary,
+        [("n2", "Go", [20.0, 40.0, 60.0, 80.0]), ("n5", "A", [0.0, 0.0, 2.0, 2.0]), ("n5", "B", [0.0, 0.0, 2.0, 2.0])],
+        "an inactive ancestor hides a node's region"
+    );
+}
+
+/// The triggers are the `BuildingBlocks_TriggerURL` names of an interactable widget's `onLeftClick` (synthetic).
+#[test]
+fn left_click_triggers_need_an_enabled_interactable_widget() {
+    let raw = |can: bool, disabled: bool| {
+        serde_json::json!({"interactions": {"canInteract": can, "disabled": disabled, "onLeftClick": [
+            {"_Type_": "BuildingBlocks_TriggerURL", "name": "Go"},
+            {"_Type_": "BuildingBlocks_SomethingElse", "name": "Other"},
+            {"_Type_": "BuildingBlocks_TriggerURL", "name": ""}
+        ]}})
+    };
+    assert_eq!(crate::ui_ir::left_click_triggers(&raw(true, false)), ["Go"]);
+    assert!(crate::ui_ir::left_click_triggers(&raw(false, false)).is_empty());
+    assert!(crate::ui_ir::left_click_triggers(&raw(true, true)).is_empty());
+    assert!(crate::ui_ir::left_click_triggers(&serde_json::json!({})).is_empty());
+}

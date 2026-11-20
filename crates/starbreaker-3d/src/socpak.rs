@@ -1478,10 +1478,10 @@ fn process_entity_children(
 
         // Skip non-visual entities. Proximity sensors (door triggers) are kept:
         // their class resolves no geometry and the pipeline reads their trigger
-        // volume from DataCore.
-        if SKIP_ENTITY_CLASSES.contains(&entity_class)
-            || entity_class.starts_with("ChipSet_Light")
-        {
+        // volume from DataCore. So are logic entities (light-control chipsets):
+        // their class resolves no geometry either (they are not placed), and the
+        // pipeline lists the linked ones by their state-machine component.
+        if SKIP_ENTITY_CLASSES.contains(&entity_class) {
             continue;
         }
 
@@ -1904,6 +1904,8 @@ fn parse_light_group(
         .and_then(|value| value.rsplit_once('['))
         .and_then(|(_, value)| value.strip_suffix(']'))
         .map(str::to_owned);
+    // The group entity's own id and links: other entities name the group by id (a light panel links it).
+    let group = entity_links::entity_ref(xml, entity);
     for light in &mut lights {
         light.attachment = Some(crate::types::LightAttachment {
             group: base_name.to_owned(), helper: helper.clone(),
@@ -1911,6 +1913,8 @@ fn parse_light_group(
             item_port: item_port.clone(),
             group_position: Some(*base_pos),
             port_position: None,
+            group_entity_id: group.entity_id.clone(),
+            group_links: group.links.clone(),
         });
     }
     lights
@@ -1965,6 +1969,20 @@ mod light_regressions {
         assert_eq!(lights.len(), 1);
         for (axis, (got, want)) in lights[0].position.iter().zip([1.0, 3.0, 3.0]).enumerate() {
             assert!((got - want).abs() < 1e-6, "axis {axis}: {got} != {want}");
+        }
+    }
+
+    /// scviewer C2 fixes: a group's lights name the group entity (its `EntityCryGUID`) and carry its `EntityLinks`
+    /// (synthetic ids).
+    #[test]
+    fn light_group_lights_name_their_group_entity_and_links() {
+        let bytes = crate::test_xml::encode(r#"<Entities><Entity EntityClass="LightGroup" Name="g" EntityCryGUID="aaaa0000-0000-0000-0000-000000000001"><EntityLinks><Link TargetCryGUID="bbbb0000-0000-0000-0000-000000000002" Name="NewLink"/></EntityLinks><EntityComponentLightGroup><BakedInLights><Light><EntityComponentLight lightType="Omni"><defaultState intensity="1"/><sizeParams lightRadius="5"/></EntityComponentLight></Light><Light><EntityComponentLight lightType="Omni"><defaultState intensity="1"/><sizeParams lightRadius="5"/></EntityComponentLight></Light></BakedInLights></EntityComponentLightGroup></Entity></Entities>"#);
+        let lights = super::extract_cryxml_entities(&starbreaker_cryxml::from_bytes(&bytes).unwrap()).1;
+        assert_eq!(lights.len(), 2);
+        for light in &lights {
+            let attachment = light.attachment.as_ref().unwrap();
+            assert_eq!(attachment.group_entity_id.as_deref(), Some("aaaa0000-0000-0000-0000-000000000001"));
+            assert_eq!(attachment.group_links, ["bbbb0000-0000-0000-0000-000000000002"]);
         }
     }
 

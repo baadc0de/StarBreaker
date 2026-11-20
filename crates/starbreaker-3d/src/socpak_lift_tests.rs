@@ -285,6 +285,28 @@ fn door_speed_override_is_read_by_component_type() {
     let meshes = extract_cryxml_entities(&starbreaker_cryxml::from_bytes(&bytes).unwrap()).0;
     assert_eq!(meshes[0].entity.overrides.door_animation_speed, Some(1.2));
     assert_eq!(meshes[0].entity.overrides.use_auto_close_delay, None);
+    assert_eq!(meshes[0].entity.overrides.door_is_opened, None);
+    assert_eq!(meshes[0].entity.overrides.door_animation, None);
+}
+
+/// scviewer C2 fixes: an instance's door rest state and `AnimationParams` (its `__type` and tags) are read by
+/// component type (synthetic values in the `.soc` attribute layout).
+#[test]
+fn door_state_overrides_are_read_by_component_type() {
+    let bytes = crate::test_xml::encode(
+        r#"<Entities><Entity Name="door" EntityClassGUID="11110000-0000-0000-0000-000000000003" EntityCryGUID="aaaa0000-0000-0000-0000-000000000003">
+             <PropertiesDataCore><SCItemDoor __type="SCItemDoorParams" IsOpened="1" IsLocked="0">
+               <AnimationParams __type="SCItemDoorTestParams" TransitionTag="T" />
+             </SCItemDoor></PropertiesDataCore>
+           </Entity></Entities>"#,
+    );
+    let meshes = extract_cryxml_entities(&starbreaker_cryxml::from_bytes(&bytes).unwrap()).0;
+    let overrides = &meshes[0].entity.overrides;
+    assert_eq!((overrides.door_is_opened, overrides.door_is_locked), (Some(true), Some(false)));
+    let animation = overrides.door_animation.as_ref().expect("AnimationParams");
+    assert_eq!(animation.type_name.as_deref(), Some("SCItemDoorTestParams"));
+    assert_eq!(animation.transition_tag.as_deref(), Some("T"));
+    assert_eq!(animation.open_tag, None);
 }
 
 /// scviewer WP-I1 I1-5: a placement's `EntityComponentUserVariables` instance values are read by array and `__index`

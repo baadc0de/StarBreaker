@@ -170,6 +170,10 @@ struct SceneInstanceRecord {
     detach_direction: [f32; 3],
     port_flags: String,
     ui_bindings: Vec<UiBinding>,
+    /// The entity class's `SCItemDoorParams` (loadout children).
+    door: Option<crate::types::DoorTiming>,
+    /// The entity class's vehicle item-port interaction links.
+    item_port_links: Vec<crate::types::ItemPortLink>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -337,6 +341,8 @@ fn inventory_container_payload(
         entity_name: container.entity_name.clone(),
         entity_category: None,
         attach_def_type: None,
+        door: None,
+        item_port_links: Vec::new(),
         parent_node_name: container.parent_node_name.clone(),
         parent_entity_name: container.parent_entity_name.clone(),
         no_rotation: container.no_rotation,
@@ -528,6 +534,8 @@ fn resolve_instance_transform(
             entity_name: child.entity_name.clone(),
             entity_category: child.entity_category.clone(),
             attach_def_type: child.attach_def_type.clone(),
+            door: child.door.clone(),
+            item_port_links: child.item_port_links.clone(),
             parent_node_name: child.parent_node_name.clone(),
             parent_entity_name: child.parent_entity_name.clone(),
             no_rotation: child.no_rotation,
@@ -1635,6 +1643,8 @@ pub(crate) fn write_decomposed_export(
             detach_direction: child.detach_direction,
             port_flags: child.port_flags.clone(),
             ui_bindings,
+            door: child.door.clone(),
+            item_port_links: child.item_port_links.clone(),
         });
 
         if child_count > 0 {
@@ -2584,6 +2594,8 @@ fn scene_instance_json(instance: &SceneInstanceRecord) -> serde_json::Value {
         "detach_direction": instance.detach_direction,
         "port_flags": instance.port_flags,
         "item_type": instance.item_type,
+        "door": instance.door,
+        "item_port_links": instance.item_port_links,
         "ui_bindings": instance.ui_bindings.iter().map(ui_binding_json).collect::<Vec<_>>(),
     })
 }
@@ -2611,6 +2623,8 @@ fn interior_container_json(container: &InteriorContainerRecord) -> serde_json::V
                 "parent_attachment": placement.identity.parent,
                 "door": placement.identity.door,
                 "interaction_points": placement.identity.interaction_points,
+                "item_port_links": placement.identity.item_port_links,
+                "sendable_interactions": placement.identity.sendable_interactions,
                 "ui_bindings": placement.ui_bindings.iter().map(ui_binding_json).collect::<Vec<_>>(),
                 "transform": placement.transform,
                 "palette_id": placement.palette_id,
@@ -2662,6 +2676,8 @@ fn ui_binding_json(binding: &UiBinding) -> serde_json::Value {
         "user_variables": binding.user_variables,
         "state_types": binding.state_types,
         "state_images": binding.state_images,
+        "image_size_px": binding.image_size_px,
+        "buttons": binding.buttons,
     })
 }
 
@@ -3494,14 +3510,14 @@ fn generated_ui_binding_record(
     render_cache: &UiRenders,
 ) -> (UiBinding, Vec<(String, Vec<u8>)>) {
     let mut binding = binding.clone();
-    let key = ui_render_key(&binding, None);
+    let key = ui_render_key(&binding, &[]);
     // Reuse the pre-rendered image for this screen if available (most screens
     // recur across placements/children); otherwise render live.
     let render_result = match render_cache.renders.get(&key) {
         Some(result) => result.clone(),
-        None => crate::ui_pipeline::render_ui_binding_png(
+        None => crate::ui_pipeline::render_ui_binding(
             &binding,
-            None,
+            &[],
             db,
             p4k,
             texture_mip,
@@ -3513,34 +3529,56 @@ fn generated_ui_binding_record(
         ),
     };
     match render_result {
-        Ok(png_bytes) => {
+        Ok(render) => {
+            let png_bytes = render.png;
+            binding.image_size_px = Some(render.size_px);
+            binding.buttons = render.buttons;
             let stem = render_cache.stem(&key, &binding);
             let export_path =
                 generated_ui_binding_path_for_stem(root_entity_name, root_geometry_path, root_manufacturer_id, &stem);
             // The owner's other states the canvas shows (one state type away from the default; I1-3): a render that
-            // equals the default shows nothing the default does not, and is not written.
+            // equals the default shows nothing the default does not, and is not written. Then the pairs of states
+            // (C2 fixes): a pair is written only when it shows something neither the default nor any single state
+            // render shows.
             let mut file_record = Vec::new();
-            for (state_type, state) in render_cache.states.get(&key).into_iter().flatten() {
-                let state_key = ui_render_key(&binding, Some((state_type, state)));
+            let mut single_pngs: Vec<Vec<u8>> = Vec::new();
+            let singles = render_cache.states.get(&key).into_iter().flatten().map(|state| vec![state.clone()]);
+            let pairs = render_cache.pairs.get(&key).into_iter().flatten().map(|pair| pair.to_vec());
+            for pins in singles.chain(pairs) {
+                let pin_refs: Vec<(&str, &str)> = pins.iter().map(|(t, s)| (t.as_str(), s.as_str())).collect();
+                let state_key = ui_render_key(&binding, &pin_refs);
+                let label = || pins.iter().map(|(t, s)| format!("{t}.{s}")).collect::<Vec<_>>().join("+");
                 match render_cache.renders.get(&state_key) {
-                    Some(Ok(state_png)) if *state_png != png_bytes => {
+                    Some(Ok(state_render)) => {
+                        let state_png = &state_render.png;
+                        let single = pins.len() == 1;
+                        if single {
+                            single_pngs.push(state_png.clone());
+                        }
+                        if *state_png == png_bytes || (!single && single_pngs.contains(state_png)) {
+                            continue;
+                        }
                         let path = generated_ui_binding_path_for_stem(
                             root_entity_name,
                             root_geometry_path,
                             root_manufacturer_id,
-                            &render_cache.state_stem(&state_key, &stem, state_type, state),
+                            &render_cache.state_stem(&state_key, &stem, &pins),
                         );
                         file_record.push((path.clone(), state_png.clone()));
                         binding.state_images.push(crate::types::UiStateImage {
-                            state_type: state_type.clone(),
-                            state: state.clone(),
+                            state_type: single.then(|| pins[0].0.clone()),
+                            state: single.then(|| pins[0].1.clone()),
+                            states: pins
+                                .iter()
+                                .map(|(t, s)| crate::types::UiStatePin { state_type: t.clone(), state: s.clone() })
+                                .collect(),
                             generated_image_path: path,
                         });
                     }
-                    Some(Ok(_)) => {}
                     Some(Err(e)) => log::warn!(
-                        "ui render failed for {:?} state {state_type}.{state}: {e}",
-                        binding.helper_name.as_deref().unwrap_or(&binding.source_entity_name)
+                        "ui render failed for {:?} state {}: {e}",
+                        binding.helper_name.as_deref().unwrap_or(&binding.source_entity_name),
+                        label()
                     ),
                     None => {}
                 }
@@ -3741,7 +3779,7 @@ fn lift_panel_styles(
         compiled
             .entry(binding as *const UiBinding)
             .or_insert_with(|| {
-                match crate::ui_pipeline::compile_ui_binding_ir_json(binding, None, db, p4k, texture_mip, root_manufacturer_id, loc_data, ship_data)
+                match crate::ui_pipeline::compile_ui_binding_ir_json(binding, &[], db, p4k, texture_mip, root_manufacturer_id, loc_data, ship_data)
                     .map_err(|e| log::warn!("lift panel style: door pad IR failed: {e}"))
                     .ok()
                     .and_then(|ir| serde_json::from_str::<serde_json::Value>(&ir).ok())
@@ -4025,6 +4063,8 @@ mod manufacturer_id_tests {
             user_variables: Vec::new(),
             state_types: Vec::new(),
             state_images: Vec::new(),
+            image_size_px: None,
+            buttons: Vec::new(),
         };
 
         assert_eq!(generated_ui_type_segment("Objects/Spaceships/Ships/DRAK/Clipper/exterior/test.cga"), "ship");
@@ -6656,11 +6696,11 @@ mod tests {
         // only for provenance) -> equal key.
         let mut same = base.clone();
         same.canvas_record_name = Some("SomeOtherRecordName".to_string());
-        assert_eq!(ui_render_key(&base, None), ui_render_key(&same, None));
+        assert_eq!(ui_render_key(&base, &[]), ui_render_key(&same, &[]));
         // Different view field (helper_name) -> different key.
         let mut different = base.clone();
         different.helper_name = Some("screen_b".to_string());
-        assert_ne!(ui_render_key(&base, None), ui_render_key(&different, None));
+        assert_ne!(ui_render_key(&base, &[]), ui_render_key(&different, &[]));
     }
 
     #[test]
@@ -8130,9 +8170,30 @@ mod tests {
             detach_direction: [0.0, 0.0, -1.0],
             port_flags: "invisible uneditable".into(),
             ui_bindings: Vec::new(),
+            // Synthetic door state and item-port link (scviewer C2 fixes): emitted as `door` / `item_port_links`.
+            door: Some(crate::types::DoorTiming {
+                is_opened: Some(false),
+                animation_params: Some("SCItemDoorTestParams".into()),
+                transition_tag: Some("T".into()),
+                ..Default::default()
+            }),
+            item_port_links: vec![crate::types::ItemPortLink {
+                source_slot: "Go".into(),
+                target_port: "port_a".into(),
+                target_slot: "In".into(),
+            }],
         };
         assert!(scene_instance_json(&child).as_object().unwrap().contains_key("item_type"));
         assert_eq!(scene_instance_json(&child)["item_type"], "Seat");
+        let json = scene_instance_json(&child);
+        assert_eq!(json["door"]["is_opened"], false);
+        assert_eq!(json["door"]["animation_params"], "SCItemDoorTestParams");
+        assert_eq!(json["door"]["transition_tag"], "T");
+        assert!(json["door"]["open_tag"].is_null(), "unauthored: null");
+        assert_eq!(json["item_port_links"], serde_json::json!([{"source_slot": "Go", "target_port": "port_a", "target_slot": "In"}]));
+        let plain = SceneInstanceRecord { door: None, item_port_links: Vec::new(), ..child.clone() };
+        assert!(scene_instance_json(&plain)["door"].is_null());
+        assert_eq!(scene_instance_json(&plain)["item_port_links"], serde_json::json!([]));
         let unknown = SceneInstanceRecord { item_type: None, ..child.clone() };
         assert!(scene_instance_json(&unknown)["item_type"].is_null());
         let interior = InteriorContainerRecord {
@@ -8433,6 +8494,8 @@ mod tests {
             entity_name: "thruster".into(),
             entity_category: Some("Thruster".into()),
             attach_def_type: Some("MainThruster".into()),
+            door: None,
+            item_port_links: Vec::new(),
             parent_node_name: "bone".into(),
             parent_entity_name: "parent".into(),
             no_rotation: false,
@@ -8447,6 +8510,8 @@ mod tests {
 
         let maneuver_child = EntityPayload {
             attach_def_type: Some("ManneuverThruster".into()),
+            door: None,
+            item_port_links: Vec::new(),
             ..child
         };
         assert!(!should_export_engine_glow_targets(&maneuver_child));
@@ -8526,6 +8591,8 @@ mod tests {
             entity_name: "synthetic_plate".into(),
             entity_category: None,
             attach_def_type: None,
+            door: None,
+            item_port_links: Vec::new(),
             parent_node_name: "missing_root_helper".into(),
             parent_entity_name: "synthetic_root".into(),
             no_rotation: false,
@@ -8737,6 +8804,8 @@ mod tests {
             entity_name: "DRAK_Test_Command_Module".to_string(),
             entity_category: None,
             attach_def_type: None,
+            door: None,
+            item_port_links: Vec::new(),
             parent_node_name: "hardpoint_docking_module".to_string(),
             parent_entity_name: "root".to_string(),
             no_rotation: true,

@@ -3,7 +3,8 @@
 //!
 //! - [`owner_ui_values`]: the class record's `UserVariablesComponentParams` (every array, by authored order) and the
 //!   `SInteractionStateMachineParams` state types bound by state (`bindingsMethod = States`), read from the record's
-//!   JSON ([`owner_ui_values_from_components`] is the pure part).
+//!   JSON ([`owner_ui_values_from_record`] is the pure part), each state type with its interaction
+//!   transitions and linked-state tag rules (`interaction_graph::state_type_rules`).
 //! - [`apply_user_variable_overrides`]: a `.soc` placement's `EntityComponentUserVariables` instance values, matched
 //!   to the class arrays by `__index` (a C2 door pad turns `ui_HideLockControls` … on).
 //! - [`attach_owner_ui_values`]: both onto a [`UiBinding`].
@@ -47,8 +48,19 @@ fn user_value_from_text(array: &str, text: &str) -> Option<UiUserValue> {
 }
 
 /// User variables (each array in [`USER_VARIABLE_ARRAYS`] order, entries in authored order) and the state types bound
-/// by state, from an entity record's `Components` JSON array.
-pub(crate) fn owner_ui_values_from_components(components: &[serde_json::Value]) -> (Vec<UiUserVariable>, Vec<UiStateType>) {
+/// by state, with each type's interaction transitions and linked-state rules (`interaction_graph::state_type_rules`;
+/// tags named by `tag`), from an entity record's JSON.
+pub(crate) fn owner_ui_values_from_record(
+    record: &serde_json::Value,
+    tag: &dyn Fn(&serde_json::Value) -> Option<String>,
+) -> (Vec<UiUserVariable>, Vec<UiStateType>) {
+    let graph = super::interaction_graph::RecordGraph::new(record);
+    let components = record
+        .get("_RecordValue_")
+        .and_then(|v| v.get("Components"))
+        .and_then(|v| v.as_array())
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
     let mut variables = Vec::new();
     let mut state_types = Vec::new();
     for component in components {
@@ -96,7 +108,14 @@ pub(crate) fn owner_ui_values_from_components(components: &[serde_json::Value]) 
                         .and_then(|s| s.get("StateName").and_then(|v| v.as_str()))
                         .map(str::to_string)
                         .unwrap_or_else(|| state_names[0].clone());
-                    state_types.push(UiStateType { name: name.to_string(), states: state_names, default_state });
+                    let (transitions, linked) = super::interaction_graph::state_type_rules(&graph, state_type, tag);
+                    state_types.push(UiStateType {
+                        name: name.to_string(),
+                        states: state_names,
+                        default_state,
+                        transitions,
+                        linked,
+                    });
                 }
             }
             _ => {}
@@ -105,21 +124,12 @@ pub(crate) fn owner_ui_values_from_components(components: &[serde_json::Value]) 
     (variables, state_types)
 }
 
-/// [`owner_ui_values_from_components`] of the entity `record`.
+/// [`owner_ui_values_from_record`] of the entity `record`.
 pub(crate) fn owner_ui_values(db: &Database, record: &Record) -> (Vec<UiUserVariable>, Vec<UiStateType>) {
-    let Ok(bytes) = starbreaker_datacore::export::to_json_compact(db, record) else {
+    let Some(json) = super::interaction_graph::record_json(db, record) else {
         return (Vec::new(), Vec::new());
     };
-    let Ok(json) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
-        return (Vec::new(), Vec::new());
-    };
-    let components = json
-        .get("_RecordValue_")
-        .and_then(|v| v.get("Components"))
-        .and_then(|v| v.as_array())
-        .map(Vec::as_slice)
-        .unwrap_or(&[]);
-    owner_ui_values_from_components(components)
+    owner_ui_values_from_record(&json, &|t| super::interaction_graph::tag_name(db, t))
 }
 
 /// Apply a placement's instance overrides: override `__index` N of array A replaces the class's N-th variable of A.
@@ -202,6 +212,14 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn record() -> serde_json::Value {
+        json!({"_RecordValue_": {"Components": components()}})
+    }
+
+    fn no_tags(_: &serde_json::Value) -> Option<String> {
+        None
+    }
+
     /// Synthetic record components (structure of `UserVariablesComponentParams` / `SInteractionStateMachineParams`;
     /// no game values).
     fn components() -> Vec<serde_json::Value> {
@@ -226,7 +244,7 @@ mod tests {
 
     #[test]
     fn owner_values_read_every_user_variable_array_and_the_state_bound_types() {
-        let (variables, types) = owner_ui_values_from_components(&components());
+        let (variables, types) = owner_ui_values_from_record(&record(), &no_tags);
         let names: Vec<&str> = variables.iter().map(|v| v.name.as_str()).collect();
         assert_eq!(names, ["b0", "b1", "b2", "i0", "f0", "s0", "l0"]);
         assert_eq!(variables[2].value, UiUserValue::Bool(true));
@@ -241,7 +259,7 @@ mod tests {
     /// C2 door pads set bools 0, 2, 4 and 5).
     #[test]
     fn instance_overrides_replace_class_values_by_array_and_index() {
-        let (mut variables, _) = owner_ui_values_from_components(&components());
+        let (mut variables, _) = owner_ui_values_from_record(&record(), &no_tags);
         let lengths = user_variable_array_lengths(&variables);
         let o = |array: &str, index: usize, value: &str| UserVariableOverride {
             array: array.into(),
@@ -258,6 +276,43 @@ mod tests {
         assert_eq!(variables[2].value, UiUserValue::Bool(false));
         assert_eq!(variables[3].value, UiUserValue::Int(7));
         assert_eq!(variables[4].value, UiUserValue::Float(0.5), "an unparsable override is skipped");
+    }
+
+    /// scviewer C2 fixes, LIVE 4.10.2: the light panel's switch state is set by its own interactions and by a linked
+    /// entity's light-switch tags, and its light state by the linked light group's state tags (skipped without a
+    /// Data.p4k).
+    #[test]
+    fn c2_light_panel_state_rules_from_game_data() {
+        let Ok(found) = starbreaker_common::discover::find_p4k() else {
+            eprintln!("skipping: no Data.p4k installed");
+            return;
+        };
+        let p4k = starbreaker_p4k::MappedP4k::open(found.path).unwrap();
+        let dcb = p4k.read_file("Data\\Game2.dcb").or_else(|_| p4k.read_file("Data\\Game.dcb")).unwrap();
+        let db = Database::from_bytes(&dcb).unwrap();
+        let idx = starbreaker_datacore::loadout::EntityIndex::new(&db);
+        let (_, types) = owner_ui_values(&db, idx.find_record("ControlPanel_Screen_LightControl").unwrap());
+        let ty = |name: &str| types.iter().find(|t| t.name == name).unwrap_or_else(|| panic!("{name}"));
+        let switch = ty("LightSwitchState");
+        let transitions: Vec<(&str, &str)> =
+            switch.transitions.iter().map(|t| (t.interaction.as_str(), t.state.as_str())).collect();
+        assert_eq!(
+            transitions,
+            [("LightsOn", "LightSwitchOn"), ("LightsOff", "LightSwitchOff"), ("LightsLow", "LightSwitchLow"), ("LightsAlarm", "LightSwitchAlarm")]
+        );
+        assert!(switch.linked.iter().any(|l| l.tag == "/State/LightSwitch/Emergency" && l.state == "LightSwitchAlarm"));
+        let light = ty("LightState");
+        assert!(light.transitions.is_empty());
+        let linked: Vec<(&str, &str)> = light.linked.iter().map(|l| (l.tag.as_str(), l.state.as_str())).collect();
+        assert_eq!(
+            linked,
+            [
+                ("/State/LightGroup/Default", "LightsOn"),
+                ("/State/LightGroup/Off", "LightsOff"),
+                ("/State/LightGroup/Auxiliary", "LightsLow"),
+                ("/State/LightGroup/Emergency", "LightsAlarm"),
+            ]
+        );
     }
 
     /// Owner values and texture aspects are for operated panels only: a resolved owner that is not a display item, or a

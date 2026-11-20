@@ -875,8 +875,27 @@ pub struct UiBinding {
     /// the renders of the other states the canvas binds.
     pub state_types: Vec<UiStateType>,
     /// Renders of the owner's other states (one state type away from the default), written by the exporter for the
-    /// states the canvas binds and whose image differs from the default render.
+    /// states the canvas binds and whose image differs from the default render; then the renders of pairs of such
+    /// states of two different bound types whose image differs from the default and from every single-state image.
     pub state_images: Vec<UiStateImage>,
+    /// Pixel size `[width, height]` of the generated images (`generated_image_path`, `state_images`): the space of
+    /// `buttons[].rect_px`. `None` when no image was generated.
+    pub image_size_px: Option<[u32; 2]>,
+    /// The default render's active clickable nodes (`interactions.canInteract`, not `disabled`, the node and its
+    /// ancestors active) whose `onLeftClick` triggers an owner interaction (`BuildingBlocks_TriggerURL`), in node
+    /// order. Empty when none or no image was generated.
+    pub buttons: Vec<UiButton>,
+}
+
+/// A clickable region of a generated UI image.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct UiButton {
+    /// The canvas node's `name` (`OnLightsButton`).
+    pub node: String,
+    /// The `BuildingBlocks_TriggerURL` `name`: the owner's interaction the click fires (`LightsOn`).
+    pub interaction: String,
+    /// The node's laid-out rectangle `[x, y, w, h]` in the image's pixels (origin top left).
+    pub rect_px: [f32; 4],
 }
 
 /// One user variable of a UI owner entity (`UserVariablesComponentParams`).
@@ -907,13 +926,52 @@ pub struct UiStateType {
     pub states: Vec<String>,
     /// The type's `DefaultState`, else its first state.
     pub default_state: String,
+    /// The owner's own interactions that set a state of this type (`States[].Interactions[]`: `Interaction` →
+    /// `NextState`), distinct pairs in authored order.
+    #[serde(default)]
+    pub transitions: Vec<UiStateTransition>,
+    /// The linked entity's state tags that set a state of this type (`SLinkedInteractionStateChangedStateModifier`
+    /// `onChangeStateTagStates[]`: each tag → `state`), in authored order.
+    #[serde(default)]
+    pub linked: Vec<UiLinkedState>,
 }
 
-/// A render of one non-default state (`ui_bindings[].state_images[]`).
+/// One interaction → state transition of a state type.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct UiStateImage {
+pub struct UiStateTransition {
+    /// The owner's shared interaction `Name` (`LightsAlarm`).
+    pub interaction: String,
+    /// The state it sets (`LightSwitchAlarm`).
+    pub state: String,
+}
+
+/// One linked state tag → state rule of a state type.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct UiLinkedState {
+    /// The full tag name (`/State/LightGroup/Emergency`); the tag's id when the tag database does not name it.
+    pub tag: String,
+    /// The state it sets (`LightsAlarm`).
+    pub state: String,
+}
+
+/// One owner state pinned by a state render.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct UiStatePin {
     pub state_type: String,
     pub state: String,
+}
+
+/// A render of non-default states (`ui_bindings[].state_images[]`): one state (`state_type` / `state` set, `states`
+/// holds that one pin) or a combination of states of different types (`states` only).
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct UiStateImage {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+    /// Every state the render pins (the others are at their type's default), in state-type order.
+    #[serde(default)]
+    pub states: Vec<UiStatePin>,
     pub generated_image_path: String,
 }
 
@@ -957,6 +1015,10 @@ pub struct EntityPayload {
     pub port_path: Option<Vec<String>>,
     /// Screen/UI bindings discovered from this entity and any attached UI children.
     pub ui_bindings: Vec<UiBinding>,
+    /// The class's `SCItemDoorParams` (loadout children; no instance overrides), when it has one.
+    pub door: Option<DoorTiming>,
+    /// The class's vehicle item-port interaction links (`SInteractionLinkParams`).
+    pub item_port_links: Vec<ItemPortLink>,
 }
 
 /// Authored group attachment metadata, independent of the group's display name.
@@ -976,6 +1038,14 @@ pub struct LightAttachment {
     /// the entity that owns the container (see `socpak::light_anchor`).
     #[serde(skip)]
     pub port_position: Option<[f64; 3]>,
+    /// The light group entity's `EntityCryGUID` (the id of its
+    /// `interiors[].entities[]` record and the target of other entities'
+    /// links); `None` when the group entity authors none.
+    #[serde(default)]
+    pub group_entity_id: Option<String>,
+    /// The light group entity's `EntityLinks` targets, in authored order.
+    #[serde(default)]
+    pub group_links: Vec<String>,
 }
 
 /// A light extracted from a CryXMLB entity in a .soc file.
@@ -1227,6 +1297,13 @@ pub struct EntityOverrides {
     pub use_auto_close_delay: Option<bool>,
     /// `SCItemDoorParams@AutoCloseDelay`.
     pub auto_close_delay: Option<f32>,
+    /// `SCItemDoorParams@IsOpened`.
+    pub door_is_opened: Option<bool>,
+    /// `SCItemDoorParams@IsLocked`.
+    pub door_is_locked: Option<bool>,
+    /// `SCItemDoorParams/AnimationParams`: its `__type` and authored tags
+    /// (`TransitionTag`, `OpenTag`, `CloseTag`), when the instance authors it.
+    pub door_animation: Option<DoorAnimationOverride>,
     /// `SCItemElevatorPathNodeParams/gatewayParams@interaction` (non-empty).
     pub gateway_interaction: Option<String>,
     /// `SCItemElevatorPathNodeParams/accessibilityParams` (`__type`,
@@ -1244,6 +1321,16 @@ pub struct EntityOverrides {
     /// `UserVariablesComponentParams` instance values (`EntityComponentUserVariables`), in authored order: they
     /// replace the class's user variables by array and `__index` (a door pad hiding its lock controls).
     pub user_variables: Vec<UserVariableOverride>,
+}
+
+/// A `.soc` instance's `SCItemDoorParams/AnimationParams`: its polymorphic type
+/// (`None`: not authored, the class's type) and the tags it authors.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DoorAnimationOverride {
+    pub type_name: Option<String>,
+    pub transition_tag: Option<String>,
+    pub open_tag: Option<String>,
+    pub close_tag: Option<String>,
 }
 
 /// One instance value of a `UserVariablesComponentParams` array.
@@ -1330,17 +1417,60 @@ pub struct PlacementIdentity {
     pub door: Option<DoorTiming>,
     /// The class's interaction points and their interactions.
     pub interaction_points: Vec<InteractionPoint>,
+    /// The class's vehicle item-port interaction links (`SInteractionLinkParams`).
+    pub item_port_links: Vec<ItemPortLink>,
+    /// The class's sendable shared interactions.
+    pub sendable_interactions: Vec<SendableInteraction>,
 }
 
-/// `SCItemDoorParams` timing of a door entity: the class values with the
-/// instance's overrides applied.
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+/// `SCItemDoorParams` of a door entity, its timing and state: the class values
+/// with the instance's overrides applied. Every field is `None` when the data
+/// does not author it (reported, never invented).
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
 pub struct DoorTiming {
     /// `DoorAnimationSpeed`: the rate the Open/Close clips play at; `None`
     /// when the value is absent or not a number (reported, never invented).
     pub animation_speed: Option<f32>,
     pub use_auto_close_delay: Option<bool>,
     pub auto_close_delay: Option<f32>,
+    /// `IsOpened`: the door's authored rest state is open.
+    pub is_opened: Option<bool>,
+    /// `IsLocked`: the door's authored rest state is locked.
+    pub is_locked: Option<bool>,
+    /// The type of the polymorphic `AnimationParams` struct
+    /// (`SCItemDoorSimpleOpenCloseParams`, `SCItemDoorSingleProceduralParams`, …).
+    pub animation_params: Option<String>,
+    /// `AnimationParams.TransitionTag` (`SCItemDoorSingleProceduralParams`: one
+    /// fragment tag played forwards to open and backwards to close).
+    pub transition_tag: Option<String>,
+    /// `AnimationParams.OpenTag` (`SCItemDoorSimpleOpenCloseParams`).
+    pub open_tag: Option<String>,
+    /// `AnimationParams.CloseTag` (`SCItemDoorSimpleOpenCloseParams`).
+    pub close_tag: Option<String>,
+}
+
+/// One `SInteractionLinkParams.vehicleItemPortInteractionLinks` entry of an
+/// entity class: when the entity's interaction `source_slot` fires, the vehicle
+/// delivers `target_slot` to the item on its port `target_port`.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct ItemPortLink {
+    /// `sourceInteraction`: the entity's shared interaction, by `Name`.
+    pub source_slot: String,
+    /// `itemPort`: a port of the vehicle the entity is attached to.
+    pub target_port: String,
+    /// `targetInteraction`: the interaction name delivered there.
+    pub target_slot: String,
+}
+
+/// A shared interaction an entity class can send (`SSharedInteractionParams`
+/// with `Sendable`): the linked entities receive the interaction whose
+/// `LinkingTag` matches.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct SendableInteraction {
+    /// `Name` (`LightsAlarm`).
+    pub name: String,
+    /// `LinkingTag`, by its full tag name (`/Interaction/LightGroup/SetEmergency`); `None` when unauthored.
+    pub linking_tag: Option<String>,
 }
 
 /// One `SInteractionPointParams` of an entity class: a helper the player aims

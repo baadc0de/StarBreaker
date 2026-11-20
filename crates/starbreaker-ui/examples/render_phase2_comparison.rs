@@ -111,6 +111,7 @@ fn synthetic_hybrid_document() -> UiIrDocument {
             circle_fill_colour_token: None,
             style_provenance: None,
             colour_overlay_enabled: false,
+            left_click_triggers: Vec::new(),
             segmented_fill: None,
         polygon: None,
             border: Some(UiIrBorder {

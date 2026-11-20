@@ -2218,6 +2218,8 @@ fn create_test_input(entity_name: &str, num_children: usize) -> DecomposedInput 
             entity_name: format!("child_{}", i),
             entity_category: None,
             attach_def_type: None,
+            door: None,
+            item_port_links: Vec::new(),
             parent_node_name: "Root".to_string(),
             parent_entity_name: entity_name.to_string(),
             no_rotation: false,

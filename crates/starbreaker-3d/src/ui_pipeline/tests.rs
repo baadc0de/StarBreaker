@@ -128,11 +128,12 @@ fn binding_values_carry_user_variables_and_one_state_type() {
             name: "TypeA".into(),
             states: vec!["A0".into(), "A1".into()],
             default_state: "A0".into(),
+            ..Default::default()
         }],
         ..Default::default()
     };
     let loc = std::collections::HashMap::from([("test_key".to_string(), "localized".to_string())]);
-    let default = crate::ui_pipeline::ui_binding_values(&binding, None, &loc);
+    let default = crate::ui_pipeline::ui_binding_values(&binding, &[], &loc);
     assert_eq!(
         default,
         [
@@ -142,9 +143,30 @@ fn binding_values_carry_user_variables_and_one_state_type() {
             ("state.TypeA.A1".to_string(), Value::Bool(false)),
         ]
     );
-    let a1 = crate::ui_pipeline::ui_binding_values(&binding, Some(("TypeA", "A1")), &loc);
+    let a1 = crate::ui_pipeline::ui_binding_values(&binding, &[("TypeA", "A1")], &loc);
     assert_eq!(a1[2..], [
         ("state.TypeA.A0".to_string(), Value::Bool(false)),
         ("state.TypeA.A1".to_string(), Value::Bool(true)),
     ]);
+}
+
+/// scviewer C2 fixes: a combined-state render pins one state of each named type; the others stay at their default.
+/// Synthetic names.
+#[test]
+fn binding_values_pin_several_state_types() {
+    use crate::types::{UiBinding, UiStateType};
+    use starbreaker_ui::canvas::Value;
+    let ty = |name: &str, states: [&str; 2]| UiStateType {
+        name: name.into(),
+        states: states.iter().map(|s| s.to_string()).collect(),
+        default_state: states[0].into(),
+        ..Default::default()
+    };
+    let binding = UiBinding {
+        state_types: vec![ty("TypeA", ["A0", "A1"]), ty("TypeB", ["B0", "B1"]), ty("TypeC", ["C0", "C1"])],
+        ..Default::default()
+    };
+    let values = crate::ui_pipeline::ui_binding_values(&binding, &[("TypeA", "A1"), ("TypeC", "C1")], &Default::default());
+    let on: Vec<&str> = values.iter().filter(|(_, v)| *v == Value::Bool(true)).map(|(k, _)| k.as_str()).collect();
+    assert_eq!(on, ["state.TypeA.A1", "state.TypeB.B0", "state.TypeC.C1"]);
 }

@@ -12,7 +12,7 @@ use crate::types::{Record, StructId};
 use std::collections::{HashMap, HashSet};
 
 /// A node in the resolved loadout tree.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LoadoutNode {
     /// The entity's DataCore record.
     pub record: Record,
@@ -42,6 +42,11 @@ pub struct LoadoutNode {
     pub material_path: Option<String>,
     /// Child loadout entries (one level for now).
     pub children: Vec<LoadoutNode>,
+    /// `SItemPortLoadoutXMLParams.loadoutPath` of the entity's own default
+    /// loadout, when that loadout is given by an XML file (`Scripts/Loadouts/…`)
+    /// and nothing else lists the entity's children: DataCore cannot resolve it
+    /// (the file lives in the P4k), so the exporter does. `None` otherwise.
+    pub loadout_xml_path: Option<String>,
 }
 
 /// A fully resolved loadout tree rooted at a ship/entity.
@@ -690,24 +695,8 @@ pub fn resolve_loadout_indexed(idx: &EntityIndex, record: &Record) -> LoadoutTre
 
     // Query the full loadout component once — the Value includes nested loadout
     // entries, so we walk the Value tree instead of making recursive queries.
-    let children = if let Ok(compiled) = db.compile_path::<Value>(
-        record.struct_id(),
-        "Components[SEntityComponentDefaultLoadoutParams]",
-    ) {
-        if let Ok(components) = db.query_no_references(&compiled, record) {
-            let mut result = Vec::new();
-            for component in &components {
-                if let Some(loadout) = get_object_field(component, "loadout") {
-                    collect_entries_recursive(idx, loadout, &mut result, 0);
-                }
-            }
-            result
-        } else {
-            Vec::new()
-        }
-    } else {
-        Vec::new()
-    };
+    let mut children = Vec::new();
+    let loadout_xml_path = class_default_loadout(idx, record, &mut children, 0);
 
     // Resolve helper bone names from parent item port definitions
     let mut children = children;
@@ -746,7 +735,37 @@ pub fn resolve_loadout_indexed(idx: &EntityIndex, record: &Record) -> LoadoutTre
             geometry_path,
             material_path,
             children,
+            loadout_xml_path,
         },
+    }
+}
+
+/// Walk `record`'s own default loadout (`SEntityComponentDefaultLoadoutParams.loadout`) into `out`: a manual loadout's
+/// entries, recursively. A loadout given by an XML file cannot be read here; its `loadoutPath` is returned for the
+/// exporter to resolve against the P4k (see [`LoadoutNode::loadout_xml_path`]).
+fn class_default_loadout(idx: &EntityIndex, record: &Record, out: &mut Vec<LoadoutNode>, depth: usize) -> Option<String> {
+    let db = idx.db;
+    let compiled = db
+        .compile_path::<Value>(record.struct_id(), "Components[SEntityComponentDefaultLoadoutParams]")
+        .ok()?;
+    let components = db.query_no_references(&compiled, record).ok()?;
+    let mut xml_path = None;
+    for component in &components {
+        if let Some(loadout) = get_object_field(component, "loadout") {
+            collect_entries_recursive(idx, loadout, out, depth);
+            xml_path = xml_path.or_else(|| loadout_xml_path(loadout));
+        }
+    }
+    xml_path
+}
+
+/// `loadoutPath` of an `SItemPortLoadoutXMLParams` loadout value (non-empty); `None` for any other loadout type.
+pub fn loadout_xml_path(loadout: &Value) -> Option<String> {
+    match loadout {
+        Value::Object { type_name: "SItemPortLoadoutXMLParams", .. } => {
+            get_string_field(loadout, "loadoutPath").filter(|p| !p.is_empty()).map(str::to_owned)
+        }
+        _ => None,
     }
 }
 
@@ -807,9 +826,15 @@ fn manual_loadout_nodes(
             );
             continue;
         };
-        let children = match &entry.children {
-            Some(nested) => manual_loadout_nodes(idx, nested, depth + 1),
-            None => resolve_loadout_indexed(idx, record).root.children,
+        let (children, loadout_xml_path) = match &entry.children {
+            Some(nested) => (manual_loadout_nodes(idx, nested, depth + 1), None),
+            None => {
+                let mut children = Vec::new();
+                let xml_path = class_default_loadout(idx, record, &mut children, 0);
+                apply_port_info(idx.db, record, &mut children);
+                resolve_sub_geometry(idx, &mut children);
+                (children, xml_path)
+            }
         };
         let (geometry_path, material_path) = idx.query_geometry_paths(record);
         let full_name = idx.db.resolve_string2(record.name_offset);
@@ -827,6 +852,7 @@ fn manual_loadout_nodes(
             geometry_path,
             material_path,
             children,
+            loadout_xml_path,
         });
     }
     nodes
@@ -1134,13 +1160,20 @@ fn collect_entries_recursive(
 
         // Recurse into the entry's own nested loadout (from the parent's Value tree)
         let mut grandchildren = Vec::new();
-        if let Some(nested_loadout) = get_object_field(entry, "loadout") {
+        let nested = get_object_field(entry, "loadout");
+        if let Some(nested_loadout) = nested {
             collect_entries_recursive(idx, nested_loadout, &mut grandchildren, depth + 1);
         }
 
         if !class_name.is_empty() {
             // Path A: entityClassName — O(1) lookup via EntityIndex
             let child = if let Some(child_record) = idx.find_record(class_name) {
+                // An entry without a nested loadout leaves the class's own default loadout (as an entity reference's
+                // does, Paths B/C): its entries, or the XML file it names for the exporter to read.
+                let loadout_xml_path = match nested {
+                    Some(_) => None,
+                    None => class_default_loadout(idx, child_record, &mut grandchildren, depth + 1),
+                };
                 let (child_geom, child_mtl) = idx.query_geometry_paths(child_record);
                 let has_geom = child_geom.is_some();
                 log::debug!(
@@ -1165,6 +1198,7 @@ fn collect_entries_recursive(
                     geometry_path: child_geom,
                     material_path: child_mtl,
                     children: grandchildren,
+                    loadout_xml_path,
                 }
             } else {
                 log::warn!("{indent}loadout: {port_name} -> {class_name} (entity not found in EntityIndex)");
@@ -1178,8 +1212,10 @@ fn collect_entries_recursive(
             let mut ref_mtl = extract_material_from_value(ref_val);
 
             // Also walk the referenced entity's own loadout for further children
+            let mut loadout_xml_path = None;
             if let Some(ref_loadout) = extract_loadout_from_value(ref_val) {
                 collect_entries_recursive(idx, ref_loadout, &mut grandchildren, depth + 1);
+                loadout_xml_path = nested.is_none().then(|| self::loadout_xml_path(ref_loadout)).flatten();
             }
 
             // Resolve the entity record. Prefer the record_id stamped by the
@@ -1251,6 +1287,7 @@ fn collect_entries_recursive(
                     geometry_path: ref_geom,
                     material_path: ref_mtl,
                     children: grandchildren,
+                    loadout_xml_path: loadout_xml_path.clone(),
                 });
             } else if has_geom {
                 // No record found but we have geometry from the reference —
@@ -1273,6 +1310,7 @@ fn collect_entries_recursive(
                     geometry_path: ref_geom,
                     material_path: ref_mtl,
                     children: grandchildren,
+                    loadout_xml_path: loadout_xml_path.clone(),
                 });
             }
         } else if let Some(guid) = get_guid_field(entry, "entityClassReference") {
@@ -1285,17 +1323,8 @@ fn collect_entries_recursive(
 
                 // Also resolve the referenced entity's OWN loadout for nested children.
                 // Each child entity's loadout is small, so this Value query is cheap.
-                if let Ok(compiled) = idx.db.compile_path::<Value>(
-                    ref_record.struct_id(),
-                    "Components[SEntityComponentDefaultLoadoutParams]",
-                ) && let Ok(components) = idx.db.query_no_references(&compiled, ref_record)
-                {
-                    for component in &components {
-                        if let Some(loadout) = get_object_field(component, "loadout") {
-                            collect_entries_recursive(idx, loadout, &mut grandchildren, depth + 1);
-                        }
-                    }
-                }
+                let own_xml_path = class_default_loadout(idx, ref_record, &mut grandchildren, depth + 1);
+                let loadout_xml_path = nested.is_none().then_some(own_xml_path).flatten();
 
                 let has_geom = ref_geom.is_some();
                 log::debug!(
@@ -1320,6 +1349,7 @@ fn collect_entries_recursive(
                     geometry_path: ref_geom,
                     material_path: ref_mtl,
                     children: grandchildren,
+                    loadout_xml_path: loadout_xml_path.clone(),
                 });
             }
         }

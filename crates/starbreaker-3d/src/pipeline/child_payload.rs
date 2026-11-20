@@ -462,6 +462,15 @@ pub(crate) fn load_child_payloads(
             let child = &spec.child;
             let entity_category = entity_record_category(db, &child.record);
             let attach_def_type = entity_record_attach_def_type(db, &child.record);
+            // The class's door and vehicle item-port interaction links (a loadout child has no instance overrides; a
+            // vehicle XML part carries its vehicle's record, not its own, and has no port).
+            let own_record = child.item_port_name.is_some();
+            let door = own_record.then(|| super::interior_interactions::class_door(db, &child.record)).flatten();
+            let item_port_links = if own_record {
+                super::interior_interactions::class_item_port_links(db, &child.record)
+            } else {
+                Vec::new()
+            };
             let mut ui_bindings = ui_bindings_by_parent
                 .get(&child.entity_name)
                 .cloned()
@@ -563,6 +572,8 @@ pub(crate) fn load_child_payloads(
                     port_flags: child.port_flags.clone(),
                     port_path: spec.port_path.clone(),
                     ui_bindings,
+                    door: door.clone(),
+                    item_port_links: item_port_links.clone(),
                 })
             } else if child.nmc.is_some() {
                 Some(crate::types::EntityPayload {
@@ -587,6 +598,8 @@ pub(crate) fn load_child_payloads(
                     port_flags: child.port_flags.clone(),
                     port_path: spec.port_path.clone(),
                     ui_bindings,
+                    door,
+                    item_port_links,
                 })
             } else {
                 None
@@ -691,6 +704,8 @@ fn ui_binding_for_record_base(db: &Database, record: &Record) -> Option<UiBindin
                 user_variables: Vec::new(),
                 state_types: Vec::new(),
                 state_images: Vec::new(),
+                image_size_px: None,
+                buttons: Vec::new(),
             });
         }
     }
@@ -750,6 +765,8 @@ fn ui_binding_for_record_base(db: &Database, record: &Record) -> Option<UiBindin
                 user_variables: Vec::new(),
                 state_types: Vec::new(),
                 state_images: Vec::new(),
+                image_size_px: None,
+                buttons: Vec::new(),
             });
         }
     }
@@ -906,6 +923,8 @@ fn ui_binding_for_record_base(db: &Database, record: &Record) -> Option<UiBindin
         user_variables: Vec::new(),
         state_types: Vec::new(),
         state_images: Vec::new(),
+        image_size_px: None,
+        buttons: Vec::new(),
     })
 }
 

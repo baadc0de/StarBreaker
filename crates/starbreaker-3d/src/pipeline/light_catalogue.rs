@@ -48,7 +48,7 @@ pub fn entity_light_catalogue(
         resolve_children(
             db,
             p4k,
-            &tree.root.children,
+            &super::xml_loadouts::expanded_children(db, p4k, tree),
             &opts,
             &load_invisible_ports(db, p4k, record),
             &load_vehicle_port_selectors(db, p4k, record),

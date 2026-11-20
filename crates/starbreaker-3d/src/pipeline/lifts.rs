@@ -4,8 +4,10 @@
 //! - [`InteriorEntity`]: an entity the player or a lift interacts with that has
 //!   no mesh of its own — a lift's path nodes (`SCItemElevatorPathNodeParams`),
 //!   transit gateways and limbo nodes, and interaction-only entities (a call
-//!   button whose geometry is helpers only). Their interaction points carry the
-//!   helper frames, which no mesh supplies.
+//!   button whose geometry is helpers only), light groups (`SLightGroupComponentParams`:
+//!   their interactions and the light state each ends in) and logic entities (a
+//!   linked entity with an interaction state machine: a light-control chipset). Their
+//!   interaction points carry the helper frames, which no mesh supplies.
 //! - [`Lift`]: one per entity whose class has `SCItemElevatorParams` (a
 //!   carriage): its parameters, rest node, stops in chain order with their
 //!   landing doors, and the entities that ride it.
@@ -13,13 +15,17 @@
 //!   `EntityLinks`; the stop order starts at the node no other node links to.
 //!   A branched, cyclic or disconnected node graph is an error and that lift is
 //!   not exported.
-//! - [`resolve_container`]: both lists for one container, plus the door timing
-//!   and interaction points of its placements.
+//! - [`resolve_container`]: both lists for one container, plus the door timing,
+//!   interaction points, item-port links and sendable interactions of its placements.
 
 use std::collections::{HashMap, HashSet};
 
+use super::interaction_graph::LightGroupFacts;
 use super::interior_interactions::{ElevatorParams, InteractionResolver};
-use crate::types::{Accessibility, InteractionLink, InteractionPoint, InteriorMesh, InteriorPlacement, ParentAttachment, TraversalLink};
+use crate::types::{
+    Accessibility, InteractionLink, InteractionPoint, InteriorMesh, InteriorPlacement, ParentAttachment, SendableInteraction,
+    TraversalLink,
+};
 
 /// A geometry-less interactive entity of an interior container.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -28,7 +34,7 @@ pub(crate) struct InteriorEntity {
     pub entity_name: Option<String>,
     pub entity_class_guid: Option<String>,
     pub entity_class: String,
-    /// `path_node`, `transit_gateway`, `transit_limbo` or `interaction`.
+    /// `path_node`, `transit_gateway`, `transit_limbo`, `interaction`, `light_group` or `logic`.
     pub kind: &'static str,
     /// Container-local, the frame of the container's placements.
     pub transform: [[f32; 4]; 4],
@@ -37,6 +43,12 @@ pub(crate) struct InteriorEntity {
     pub parent_attachment: Option<ParentAttachment>,
     pub interaction_points: Vec<InteractionPoint>,
     pub traversal_links: Vec<TraversalLink>,
+    /// A light group's interactions (`kind` `light_group`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub light_group: Option<LightGroupFacts>,
+    /// The class's sendable shared interactions (omitted when none).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub sendable_interactions: Vec<SendableInteraction>,
 }
 
 /// One stop (or pass-through node) of a lift.
@@ -167,7 +179,13 @@ pub(crate) fn resolve_container(
         placement.identity.door = resolver.door(guid.as_deref(), &overrides);
         placement.identity.interaction_points =
             resolver.points(guid.as_deref(), &overrides, placement.identity.entity_id.as_deref());
+        if let Some(facts) = resolver.class(guid.as_deref()) {
+            placement.identity.item_port_links = facts.item_port_links.clone();
+            placement.identity.sendable_interactions = facts.sendable_interactions.clone();
+        }
     }
+    // Ids some entity of the container links: a logic entity is listed when it links or is linked.
+    let linked: HashSet<&str> = meshes.iter().flat_map(|m| m.entity.links.iter().map(String::as_str)).collect();
     let by_id: HashMap<&str, &InteriorMesh> =
         meshes.iter().filter_map(|m| Some((m.entity.entity_id.as_deref()?, m))).collect();
 
@@ -184,6 +202,10 @@ pub(crate) fn resolve_container(
             role
         } else if !facts.interaction_points.is_empty() && !mesh.entity.interaction_links.is_empty() {
             "interaction"
+        } else if facts.light_group.is_some() {
+            "light_group"
+        } else if facts.state_machine && !facts.proximity_sensor && (!mesh.entity.links.is_empty() || linked.contains(id)) {
+            "logic"
         } else {
             continue;
         };
@@ -206,6 +228,8 @@ pub(crate) fn resolve_container(
             parent_attachment: mesh.entity.parent.clone(),
             interaction_points: points,
             traversal_links: resolver.traversal_names(mesh.entity_class_guid.as_deref(), &mesh.entity.overrides.traversal_links),
+            light_group: facts.light_group.clone(),
+            sendable_interactions: facts.sendable_interactions.clone(),
         });
     }
 
@@ -309,3 +333,7 @@ fn lift(
 #[cfg(test)]
 #[path = "lifts_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "light_group_tests.rs"]
+mod light_group_tests;

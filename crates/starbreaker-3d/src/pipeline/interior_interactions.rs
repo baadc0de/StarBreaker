@@ -1,8 +1,11 @@
 //! What an interior entity's class says about how it is operated (WP-P5),
 //! resolved from DataCore once per class and cached:
 //!
-//! - [`ClassFacts`]: door timing (`SCItemDoorParams`), interaction points and
-//!   shared interactions (`SEntityInteractableParams`), the elevator carriage
+//! - [`ClassFacts`]: door timing and state (`SCItemDoorParams`), interaction points and
+//!   shared interactions (`SEntityInteractableParams`; the sendable ones with their
+//!   linking tags), vehicle item-port interaction links (`SInteractionLinkParams`),
+//!   a light group's interactions (`SLightGroupComponentParams`, see
+//!   `interaction_graph`), whether it has a state machine, the elevator carriage
 //!   (`SCItemElevatorParams`, its physics grid) and path-node
 //!   (`SCItemElevatorPathNodeParams`) components, the transit gateway / limbo
 //!   node roles, and the class geometry.
@@ -22,7 +25,10 @@ use starbreaker_datacore::query::value::Value;
 use starbreaker_datacore::types::Record;
 
 use super::interior_entities::{field, number};
-use crate::types::{DoorTiming, EntityOverrides, InteractionPoint, PointInteraction, TraversalLink};
+use super::interaction_graph::LightGroupFacts;
+use crate::types::{
+    DoorTiming, EntityOverrides, InteractionPoint, ItemPortLink, PointInteraction, SendableInteraction, TraversalLink,
+};
 
 /// `SCItemElevatorParams` of a carriage class.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -67,6 +73,16 @@ pub(crate) struct ClassFacts {
     pub transit_role: Option<&'static str>,
     /// `SGeometryResourceParams…Geometry.path`.
     pub geometry_path: Option<String>,
+    /// `SInteractionLinkParams.vehicleItemPortInteractionLinks`, resolved.
+    pub item_port_links: Vec<ItemPortLink>,
+    /// Shared interactions with `Sendable`, with their linking tags.
+    pub sendable_interactions: Vec<SendableInteraction>,
+    /// `SLightGroupComponentParams`: the class is a light group.
+    pub light_group: Option<LightGroupFacts>,
+    /// The class has an interaction state machine (`SInteractionStateMachineParams`).
+    pub state_machine: bool,
+    /// The class is a walk-up trigger (`SCItemProximitySensorParams`; exported as a proximity sensor).
+    pub proximity_sensor: bool,
 }
 
 fn text<'a>(value: &'a Value<'a>) -> Option<&'a str> {
@@ -93,12 +109,83 @@ fn query<'a>(db: &'a Database, record: &Record, path: &str) -> Option<Value<'a>>
     db.query_single::<Value>(&compiled, record).ok().flatten()
 }
 
+fn tag_text(value: Option<&Value>) -> Option<String> {
+    value.and_then(text).filter(|s| !s.is_empty()).map(str::to_string)
+}
+
 pub(crate) fn door_timing(component: &Value) -> DoorTiming {
+    let animation = field(component, "AnimationParams");
     DoorTiming {
         animation_speed: field(component, "DoorAnimationSpeed").and_then(number),
         use_auto_close_delay: field(component, "UseAutoCloseDelay").and_then(boolean),
         auto_close_delay: field(component, "AutoCloseDelay").and_then(number),
+        is_opened: field(component, "IsOpened").and_then(boolean),
+        is_locked: field(component, "IsLocked").and_then(boolean),
+        animation_params: match animation {
+            Some(Value::Object { type_name, .. }) if !type_name.is_empty() => Some(type_name.to_string()),
+            _ => None,
+        },
+        transition_tag: tag_text(animation.and_then(|a| field(a, "TransitionTag"))),
+        open_tag: tag_text(animation.and_then(|a| field(a, "OpenTag"))),
+        close_tag: tag_text(animation.and_then(|a| field(a, "CloseTag"))),
     }
+}
+
+/// The door with a `.soc` instance's overrides applied: each authored value replaces the class's; an instance
+/// `AnimationParams` of another type replaces the class's whole struct (its tags with it).
+pub(crate) fn door_with_overrides(mut door: DoorTiming, overrides: &EntityOverrides) -> DoorTiming {
+    door.animation_speed = overrides.door_animation_speed.or(door.animation_speed);
+    door.use_auto_close_delay = overrides.use_auto_close_delay.or(door.use_auto_close_delay);
+    door.auto_close_delay = overrides.auto_close_delay.or(door.auto_close_delay);
+    door.is_opened = overrides.door_is_opened.or(door.is_opened);
+    door.is_locked = overrides.door_is_locked.or(door.is_locked);
+    if let Some(animation) = &overrides.door_animation {
+        if animation.type_name.is_some() && animation.type_name != door.animation_params {
+            door.animation_params = animation.type_name.clone();
+            door.transition_tag = None;
+            door.open_tag = None;
+            door.close_tag = None;
+        }
+        door.transition_tag = animation.transition_tag.clone().or(door.transition_tag);
+        door.open_tag = animation.open_tag.clone().or(door.open_tag);
+        door.close_tag = animation.close_tag.clone().or(door.close_tag);
+    }
+    door
+}
+
+/// `vehicleItemPortInteractionLinks` of an `SInteractionLinkParams` value, in authored order; an entry without a
+/// source interaction, port or target interaction is skipped (logged).
+pub(crate) fn item_port_links(component: &Value) -> Vec<ItemPortLink> {
+    let Some(Value::Array(links)) = field(component, "vehicleItemPortInteractionLinks") else {
+        return Vec::new();
+    };
+    links
+        .iter()
+        .filter_map(|link| {
+            let source = interaction_name(field(link, "sourceInteraction"));
+            let port = field(link, "itemPort").and_then(text).filter(|s| !s.is_empty());
+            let target = field(link, "targetInteraction").and_then(text).filter(|s| !s.is_empty());
+            match (source, port, target) {
+                (Some(source_slot), Some(port), Some(target)) => {
+                    Some(ItemPortLink { source_slot, target_port: port.to_string(), target_slot: target.to_string() })
+                }
+                (source, port, target) => {
+                    log::warn!("item-port interaction link with an unresolved part ({source:?}, {port:?}, {target:?}) skipped");
+                    None
+                }
+            }
+        })
+        .collect()
+}
+
+/// The door of an entity class (`SCItemDoorParams`), without instance overrides (a loadout child).
+pub(crate) fn class_door(db: &Database, record: &Record) -> Option<DoorTiming> {
+    query(db, record, "Components[SCItemDoorParams]").map(|c| door_timing(&c))
+}
+
+/// The vehicle item-port interaction links of an entity class.
+pub(crate) fn class_item_port_links(db: &Database, record: &Record) -> Vec<ItemPortLink> {
+    query(db, record, "Components[SInteractionLinkParams]").map(|c| item_port_links(&c)).unwrap_or_default()
 }
 
 pub(crate) fn elevator_params(component: &Value) -> ElevatorParams {
@@ -174,10 +261,29 @@ pub(crate) fn shared_interactions(interactable: &Value) -> Vec<String> {
 fn class_facts(db: &Database, record: &Record) -> ClassFacts {
     let name = db.resolve_string2(record.name_offset);
     let mut facts = ClassFacts { record_name: name.rsplit('.').next().unwrap_or(name).to_string(), ..Default::default() };
-    facts.door = query(db, record, "Components[SCItemDoorParams]").map(|c| door_timing(&c));
+    facts.door = class_door(db, record);
+    facts.item_port_links = class_item_port_links(db, record);
+    let mut light_group = query(db, record, "Components[SLightGroupComponentParams]").is_some();
     if let Some(interactable) = query(db, record, "Components[SEntityInteractableParams].Interactable") {
         facts.interaction_points = interaction_points(&interactable);
         facts.shared_interactions = shared_interactions(&interactable);
+        // Linking tags and the state machine are read with their pointer identities from the record JSON (a large
+        // state machine exceeds the materialized query's budget, so its presence is read there too).
+        if let Some(json) = super::interaction_graph::record_json(db, record) {
+            let graph = super::interaction_graph::RecordGraph::new(&json);
+            let tag = |t: &serde_json::Value| super::interaction_graph::tag_name(db, t);
+            facts.sendable_interactions = super::interaction_graph::sendable_interactions(&graph, &tag);
+            facts.state_machine = graph.component("SInteractionStateMachineParams").is_some();
+            facts.proximity_sensor = graph.component("SCItemProximitySensorParams").is_some();
+            light_group |= graph.component("SLightGroupComponentParams").is_some();
+            if light_group {
+                facts.light_group =
+                    Some(LightGroupFacts { interactions: super::interaction_graph::light_group_interactions(&graph, &tag) });
+            }
+        }
+    }
+    if light_group && facts.light_group.is_none() {
+        facts.light_group = Some(LightGroupFacts { interactions: Vec::new() });
     }
     facts.elevator = query(db, record, "Components[SCItemElevatorParams]").map(|c| elevator_params(&c));
     facts.path_node = query(db, record, "Components[SCItemElevatorPathNodeParams]").map(|c| path_node_class(&c));
@@ -249,12 +355,9 @@ impl<'a> InteractionResolver<'a> {
         }
     }
 
-    /// Door timing of an entity: its class's `SCItemDoorParams` with the instance overrides.
+    /// Door timing and state of an entity: its class's `SCItemDoorParams` with the instance overrides.
     pub(crate) fn door(&mut self, guid: Option<&str>, overrides: &EntityOverrides) -> Option<DoorTiming> {
-        let mut door = self.class(guid)?.door.clone()?;
-        door.animation_speed = overrides.door_animation_speed.or(door.animation_speed);
-        door.use_auto_close_delay = overrides.use_auto_close_delay.or(door.use_auto_close_delay);
-        door.auto_close_delay = overrides.auto_close_delay.or(door.auto_close_delay);
+        let door = door_with_overrides(self.class(guid)?.door.clone()?, overrides);
         if door.animation_speed.is_none_or(|speed| !speed.is_finite() || speed <= 0.0) {
             log::warn!("[interior] door class {guid:?}: DoorAnimationSpeed {:?} is not a usable rate", door.animation_speed);
         }
@@ -298,82 +401,5 @@ pub(crate) fn shared_index(path: &str) -> Option<usize> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn object(type_name: &'static str, fields: Vec<(&'static str, Value<'static>)>) -> Value<'static> {
-        Value::Object { type_name, fields, record_id: None }
-    }
-
-    fn shared(name: &'static str) -> Value<'static> {
-        object("SSharedInteractionParams", vec![("Name", Value::String(name))])
-    }
-
-    #[test]
-    fn elevator_params_read_the_six_values_and_four_interactions() {
-        // CRUS_Hercules_Lift_Platform (LIVE 4.10.2).
-        let component = object(
-            "SCItemElevatorParams",
-            vec![
-                ("MaxSpeed", Value::Float(3.5)),
-                ("EasingDistance", Value::Float(5.1)),
-                ("IdlingPeriod", Value::Float(120.0)),
-                ("OpenWaitTime", Value::Float(4.0)),
-                ("QueueWaitTime", Value::Float(5.0)),
-                ("SlowDownAtBends", Value::Bool(false)),
-                ("OpenInnerDoorInteraction", shared("OpenInnerDoor")),
-                ("OpenInnerDoorFinishedInteraction", shared("OpenInnerDoorFinished")),
-                ("CloseAllDoorsInteraction", shared("CloseAllDoors")),
-                ("CloseInnerDoorFinishedInteraction", shared("CloseInnerDoorFinished")),
-            ],
-        );
-        let p = elevator_params(&component);
-        assert_eq!(p.max_speed, Some(3.5));
-        assert_eq!(p.easing_distance, Some(5.1));
-        assert_eq!(p.open_wait_time, Some(4.0));
-        assert_eq!(p.queue_wait_time, Some(5.0));
-        assert_eq!(p.idling_period, Some(120.0));
-        assert_eq!(p.slow_down_at_bends, Some(false));
-        assert_eq!(p.close_all_doors_interaction.as_deref(), Some("CloseAllDoors"));
-        assert_eq!(p.close_inner_door_finished_interaction.as_deref(), Some("CloseInnerDoorFinished"));
-    }
-
-    #[test]
-    fn interaction_points_keep_their_interactions_in_order() {
-        let interactable = object(
-            "SInteractableParams",
-            vec![(
-                "InteractionPoints",
-                Value::Array(vec![object(
-                    "SInteractionPointParams",
-                    vec![
-                        ("HelperName", Value::String("$proxy_elevator_button")),
-                        ("Radius", Value::Float(1.6)),
-                        (
-                            "Interactions",
-                            Value::Array(vec![
-                                object("SInteractionParams", vec![("Interaction", shared("RequestFloor1")), ("DisplayName", Value::Locale("@innerthought_lift_top_deck")), ("IsPrimary", Value::Bool(true))]),
-                                object("SInteractionParams", vec![("Interaction", shared("RequestFloor0")), ("IsPrimary", Value::Bool(false))]),
-                                object("SInteractionParams", vec![("Interaction", Value::Null)]),
-                            ]),
-                        ),
-                    ],
-                )]),
-            )],
-        );
-        let points = interaction_points(&interactable);
-        assert_eq!(points.len(), 1);
-        assert_eq!(points[0].helper_name, "$proxy_elevator_button");
-        assert_eq!(points[0].radius, Some(1.6));
-        let names: Vec<_> = points[0].interactions.iter().map(|i| i.name.as_str()).collect();
-        assert_eq!(names, ["RequestFloor1", "RequestFloor0"], "an interaction without a target is not offered");
-        assert!(points[0].interactions[0].primary);
-        assert_eq!(points[0].interactions[0].display_name_key.as_deref(), Some("@innerthought_lift_top_deck"));
-    }
-
-    #[test]
-    fn shared_index_reads_the_authored_path() {
-        assert_eq!(shared_index("InteractableComponent.Interactable.SharedInteractions[5]"), Some(5));
-        assert_eq!(shared_index("Interactable.InteractionPoints[1]"), None);
-    }
-}
+#[path = "interior_interactions_tests.rs"]
+mod tests;

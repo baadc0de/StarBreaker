@@ -425,6 +425,7 @@ mod tests {
             is_flash_renderer: false,
             auto_font_size: false,
             colour_overlay_enabled: false,
+            left_click_triggers: Vec::new(),
         }
     }
 
@@ -1145,6 +1146,7 @@ mod tests_c {
             is_flash_renderer: false,
             auto_font_size: false,
             colour_overlay_enabled: false,
+            left_click_triggers: Vec::new(),
         }
     }
 
@@ -1749,6 +1751,7 @@ mod tests_c {
                 is_flash_renderer: false,
                 auto_font_size: false,
             colour_overlay_enabled: false,
+            left_click_triggers: Vec::new(),
             }],
         };
 
@@ -1959,6 +1962,7 @@ mod tests_c {
             is_flash_renderer: false,
             auto_font_size: false,
             colour_overlay_enabled: false,
+            left_click_triggers: Vec::new(),
         }];
 
         let fetcher = StubFetcher { images: HashMap::new() };
@@ -2168,6 +2172,7 @@ mod tests_d {
             is_flash_renderer: false,
             auto_font_size: false,
             colour_overlay_enabled: false,
+            left_click_triggers: Vec::new(),
         }
     }
 
@@ -2250,6 +2255,7 @@ mod tests_d {
                 is_flash_renderer: false,
                 auto_font_size: false,
             colour_overlay_enabled: false,
+            left_click_triggers: Vec::new(),
             }],
         };
 
@@ -2633,6 +2639,7 @@ mod tests_e {
             is_flash_renderer: false,
             auto_font_size: false,
             colour_overlay_enabled: false,
+            left_click_triggers: Vec::new(),
         }
     }
 
@@ -2732,6 +2739,7 @@ mod tests_e {
             is_flash_renderer: false,
             auto_font_size: false,
             colour_overlay_enabled: false,
+            left_click_triggers: Vec::new(),
         };
         let meter = UiIrNode {
             id: 2,
@@ -2790,6 +2798,7 @@ mod tests_e {
             is_flash_renderer: false,
             auto_font_size: false,
             colour_overlay_enabled: false,
+            left_click_triggers: Vec::new(),
         };
         let document = UiIrDocument {
             schema_version: 1,

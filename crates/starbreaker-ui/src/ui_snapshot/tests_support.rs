@@ -80,6 +80,7 @@ pub(super) fn base_node(id: u32, layer: i32) -> UiIrNode {
         is_flash_renderer: false,
         auto_font_size: false,
             colour_overlay_enabled: false,
+            left_click_triggers: Vec::new(),
     }
 }
 

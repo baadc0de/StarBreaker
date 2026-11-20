@@ -31,6 +31,15 @@ fn attr<'a>(xml: &CryXml<'a>, node: &CryXmlNode, name: &str) -> Option<&'a str> 
     xml.node_attributes(node).find(|(key, _)| *key == name).map(|(_, value)| value)
 }
 
+/// An authored boolean attribute (`1` / `0`, `true` / `false`).
+fn xml_bool(value: &str) -> Option<bool> {
+    match value.trim() {
+        "1" => Some(true),
+        "0" => Some(false),
+        other => other.parse().ok(),
+    }
+}
+
 fn csv(text: &str) -> Vec<f64> {
     text.split(',').filter_map(|s| s.trim().parse().ok()).collect()
 }
@@ -94,6 +103,17 @@ pub(crate) fn overrides(xml: &CryXml, entity: &CryXmlNode) -> EntityOverrides {
         out.door_animation_speed = attr(xml, door, "DoorAnimationSpeed").and_then(|v| v.parse().ok());
         out.use_auto_close_delay = attr(xml, door, "UseAutoCloseDelay").map(|v| v == "1" || v.eq_ignore_ascii_case("true"));
         out.auto_close_delay = attr(xml, door, "AutoCloseDelay").and_then(|v| v.parse().ok());
+        out.door_is_opened = attr(xml, door, "IsOpened").and_then(xml_bool);
+        out.door_is_locked = attr(xml, door, "IsLocked").and_then(xml_bool);
+        out.door_animation = child(xml, door, "AnimationParams").map(|a| {
+            let text = |name: &str| attr(xml, a, name).filter(|s| !s.is_empty()).map(str::to_string);
+            crate::types::DoorAnimationOverride {
+                type_name: text("__type").filter(|t| t != "<NullPtr>"),
+                transition_tag: text("TransitionTag"),
+                open_tag: text("OpenTag"),
+                close_tag: text("CloseTag"),
+            }
+        });
     }
     if let Some(node) = component(xml, entity, "SCItemElevatorPathNodeParams") {
         out.gateway_interaction = child(xml, node, "gatewayParams")

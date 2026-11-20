@@ -138,6 +138,9 @@ pub struct Database<'a> {
 
     /// Pre-built index: struct_index → list of record indices (into `records`).
     records_by_struct: Vec<Box<[usize]>>,
+
+    /// Full tag names by tag id, built on first use ([`Database::tag_path`]).
+    tag_paths: std::sync::OnceLock<std::collections::HashMap<CigGuid, String>>,
 }
 
 impl std::fmt::Debug for Database<'_> {
@@ -545,6 +548,7 @@ impl<'a> Database<'a> {
             main_record_ids,
             has_weak_pointers,
             records_by_struct,
+            tag_paths: std::sync::OnceLock::new(),
         })
     }
 
@@ -835,6 +839,12 @@ impl<'a> Database<'a> {
     /// Look up a record by its GUID.
     pub fn record_by_id(&self, id: &CigGuid) -> Option<&Record> {
         self.record_map.get(id).map(|&i| &self.records[i])
+    }
+
+    /// The full name of the `Tag` record `id` as the tag database nests it
+    /// (`/Interaction/LightGroup/SetEmergency`); see [`crate::tag_paths`]. Built once per database.
+    pub fn tag_path(&self, id: &CigGuid) -> Option<&str> {
+        self.tag_paths.get_or_init(|| crate::tag_paths::tag_paths(self)).get(id).map(String::as_str)
     }
 
     /// Check if a record is a "main" record (last record with its file_name_offset).

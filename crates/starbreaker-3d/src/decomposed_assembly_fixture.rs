@@ -105,6 +105,7 @@ pub(super) fn node(record: Record, name: &str) -> LoadoutNode {
         geometry_path: Some(GEOMETRY.into()),
         material_path: Some(MATERIAL.into()),
         children: vec![],
+        loadout_xml_path: None,
     }
 }
 

@@ -1149,6 +1149,7 @@ mod tests_e {
                 is_flash_renderer: false,
                 auto_font_size: false,
             colour_overlay_enabled: false,
+            left_click_triggers: Vec::new(),
             }],
         };
 

@@ -149,7 +149,43 @@ Each `children[]` entry (`scene_instance_json`) carries:
 - the exporter-resolved transform: `source_transform_basis`,
   `local_transform_sc`, `resolved_no_rotation` (see
   [Transform Fields](#transform-fields))
+- `door` (cache format 39): `null`, or the item class's `SCItemDoorParams`
+  with the same shape as a placement's `door` (see
+  [Interaction wiring](#interaction-wiring-entities-and-lifts-wp-p5-cache-format-31)).
+  A loadout child has no instance overrides: the values are the class's. The
+  C2's rear ramp (`Door_RN_RoomConnector_Breachable_OpenReverse_crus_Starlifter_Rear_Ramp`)
+  is `{"is_opened": false, "is_locked": false, "animation_params":
+  "SCItemDoorSingleProceduralParams", "transition_tag": "Open", "open_tag": null,
+  "close_tag": null, …}`; its front doors are `SCItemDoorSimpleOpenCloseParams`
+  with `open_tag` `"Open"` / `close_tag` `"Close"`. `null` for vehicle XML parts
+  (they carry their vehicle's record, not their own).
+- `item_port_links[]` (cache format 39): the item class's
+  `SInteractionLinkParams.vehicleItemPortInteractionLinks` in authored order,
+  `{source_slot, target_port, target_slot}`: when the item's shared interaction
+  `source_slot` (the `sourceInteraction`'s `Name`) fires, the vehicle delivers
+  `target_slot` (`targetInteraction`) to the item on its port `target_port`
+  (`itemPort`, a vehicle port: match it against the siblings' `port_path`). An
+  entry missing a part is skipped (logged). Empty when none. The C2's
+  `Door_Ship_Exterior_CRUS_Starlifter_Door_Bottom` forwards its `Open` / `Close`
+  to `hardpoint_front_door_right`, `hardpoint_front_door_left` and
+  `hardpoint_front_ramp`.
 - `ui_bindings[]` (see [UI Bindings](#ui-bindings))
+
+Loadout children include the items of an entity class whose default loadout is
+an XML file (`SItemPortLoadoutXMLParams.loadoutPath`, e.g.
+`Scripts/Loadouts/Objects/Doors/DoorExteriorLoadoutCRUSStarlifterDoorBottom.xml`):
+the exporter reads the file from the P4k (`<Loadout><Items><Item portName
+itemName>`, nested `<Items>` as the item's own loadout) and attaches its items
+at the class's item ports exactly as a manual loadout
+(`pipeline/xml_loadouts.rs`). A loadout entry naming its class by
+`entityClassName` with no nested `loadout` takes the class's own default
+loadout (as an `entityClassReference` entry always did); an entry that nests a
+loadout keeps only that one. The C2's front bottom hatch thus carries
+`ControlPanel_Screen_DoorControl_Starlifter_Interior_Button` on `IP_Interior`
+and `ControlPanel_Screen_DoorControl_Starlifter_Exterior_Button` on
+`IP_Exterior`, as children with `parent_entity_name` the hatch, like the rear
+ramp's two panels. Interior (`.soc`) entities' class loadouts given by an XML
+file are not expanded yet.
 
 `port_flags` is the raw source `SItemPortDef.Flags` string for the item port that attached a child. Importers can use this to preserve source visibility semantics; for example, Blender hides attachments by default when the source port includes `invisible` while keeping the objects present for inspection.
 
@@ -177,7 +213,8 @@ Placements also carry the container entity they are
   stay inside one entry.
 - `links[]` — the ids the entity's `EntityLinks` target, in authored order
   (e.g. a door control panel links the door it operates). Targets that are not
-  exported (light chipsets, cameras) remain in the list.
+  exported (cameras) remain in the list; light groups and light-control
+  chipsets are `entities[]` records (cache format 39).
 - `loadout_owner_entity_id`, `item_port_name` — for a loadout-attached item:
   the `entity_id` of the container entity whose loadout (directly or through
   nested items) attached it, and the port it occupies on its parent. An
@@ -231,10 +268,28 @@ Placements also carry how the entity is operated
   node `attachment_target`. The placement's own `transform` stays as authored
   (container frame at authoring time).
 - `door` — `null`, or `{animation_speed, use_auto_close_delay,
-  auto_close_delay}` for a class with `SCItemDoorParams`
-  (`DoorAnimationSpeed`, `UseAutoCloseDelay`, `AutoCloseDelay`), with the
-  instance's `PropertiesDataCore` overrides applied. A value the data does
-  not supply as a number / boolean is `null` (logged), never a default.
+  auto_close_delay, is_opened, is_locked, animation_params, transition_tag,
+  open_tag, close_tag}` for a class with `SCItemDoorParams`
+  (`DoorAnimationSpeed`, `UseAutoCloseDelay`, `AutoCloseDelay`; cache format
+  39: `IsOpened` / `IsLocked`, the authored rest state; `animation_params`, the
+  type of the polymorphic `AnimationParams` struct, e.g.
+  `SCItemDoorSimpleOpenCloseParams` (separate `OpenTag` / `CloseTag`
+  fragments) or `SCItemDoorSingleProceduralParams` (one `TransitionTag`
+  fragment); its `TransitionTag` / `OpenTag` / `CloseTag`), with the
+  instance's `PropertiesDataCore` overrides applied (an instance
+  `AnimationParams` of another `__type` replaces the class's struct and its
+  tags). A value the data does not supply (or an empty tag) is `null`, never a
+  default.
+- `item_port_links[]` (cache format 39) — the class's vehicle item-port
+  interaction links, as on [children](#child-scene-instances) (empty when none).
+- `sendable_interactions[]` (cache format 39) — the class's
+  `SEntityInteractableParams` shared interactions with `Sendable`, in authored
+  order: `{name, linking_tag}` (`linking_tag`: the `LinkingTag`'s full tag name,
+  e.g. `/Interaction/LightGroup/SetEmergency`, or `null`). A linked entity
+  receives the interaction whose own `linking_tag` is the same. The C2 light
+  panels (`ControlPanel_Screen_LightControl`) send `LightsOn` →
+  `/Interaction/LightGroup/SetDefault`, `LightsOff` → `…/SetOff`, `LightsLow` →
+  `…/SetAuxiliary`, `LightsAlarm` → `…/SetEmergency`.
 - `interaction_points[]` — the class's `SEntityInteractableParams`
   interaction points that offer at least one interaction: `{index,
   helper_name, radius, helper_transform, interactions[]}` (`index`: the
@@ -267,6 +322,38 @@ local_interaction}` (`via`: the traversal node types without the
 interaction the path indexes, e.g. `GatewayOpen`). What an `item_port_name`
 such as `hardpoint_Elevator_Exterior_Door` resolves to at run time is not
 exported.
+
+Cache format 39 adds two kinds, also by component:
+
+- `"light_group"`: an entity whose class has `SLightGroupComponentParams` (the
+  group whose baked lights are `lights[]` entries with
+  `attachment.group_entity_id` = its `entity_id`). It carries `light_group:
+  {interactions: [{name, linking_tag, light_state}]}`: the class's `Linkable`
+  shared interactions in authored order, `linking_tag` the full tag name (or
+  `null`), and `light_state` the `SLightGroupComponentParams.lightStateOverrides`
+  `lightState` of the state the interaction leads to: its state-machine
+  transitions (`Interaction` → `NextState`, from any state), then every
+  `AggregateStateModifier` whose `aggregateStates` are all reached, to a
+  fixpoint (`null` when no overridden state is reached; several distinct ones
+  are logged, the first is exported). A linked panel's sendable interaction
+  with the same `linking_tag` sets that light state. `LG_Hold`
+  (`4a043d0e-eb7f-5b77-06a6-8be5e93ea681`): `Default Override` /
+  `/Interaction/LightGroup/SetDefault` → `Default`, `Auxiliary Override` /
+  `…/SetAuxiliary` → `Auxiliary`, `Emergency Override` / `…/SetEmergency` →
+  `Emergency`, `Off Override` / `…/SetOff` → `Off`, `Override Disabled` (no tag)
+  → `DisableOverride`, `Cinematic Override` → `Cinematic`.
+- `"logic"`: a geometry-less entity whose class has an interaction state
+  machine (`SInteractionStateMachineParams`) and that links another entity or
+  is linked by one: a light-control or DEFCON chipset relaying a panel's
+  interaction to a light group (the C2 top deck's panel and light group both
+  link `ChipSet_LightControl-014`). Light-control chipsets were skipped by a
+  class-name rule before; they are now kept like any geometry-less entity.
+  Proximity sensors (`SCItemProximitySensorParams`) stay in
+  `proximity_sensors[]` only.
+
+Entities of these kinds (and any other entity with sendable interactions)
+also carry `sendable_interactions[]` as on placements; both fields are omitted
+when empty / absent.
 
 `lifts[]` lists one entry per entity whose class has `SCItemElevatorParams` (a
 lift carriage):
@@ -538,7 +625,14 @@ the metadata-only `entity_light_catalogue` with an export using the same options
 they are not persistent IDs across source builds or export-option changes.
 
 `attachment` is null for single lights, or contains the source `group`, optional
-`helper`, and optional `attachment_point` parsed from SOC `TileAttachmentParams`.
+`helper`, and optional `attachment_point` parsed from SOC `TileAttachmentParams`,
+plus (cache format 39) `group_entity_id` — the light group entity's
+`EntityCryGUID`, the `entity_id` of its `interiors[].entities[]` record (`kind:
+"light_group"`) and the id other entities' `links[]` name (`null` when the group
+authors none) — and `group_links[]`, the group entity's `EntityLinks` targets in
+authored order (e.g. `LG_Hold` links its light-control chipset). A light's
+`name` (`{group}-{idx}`) is not an id; join lights to their group by
+`group_entity_id`.
 A group that names an item port (`TileAttachmentParams@ItemPortName`) of the
 container descriptor (`<name>.xml`, `TileItemPortEntries/ItemPort`) is placed
 with its origin on that port's `interactionOffset`, which is authored in the
@@ -1268,8 +1362,10 @@ not serialized.
 | `source_kiosk_interaction` | bool | Whether that entity has a `KioskInteractionEntityComponentParams` component: the player operates its UI (door and light panels, transit panels, ship-selector and freight kiosks), unlike a display that is only shown (vehicle MFDs and physical screens, HUD projectors, signage screens). It separates an operated `Display` item (a kiosk) from a shown one. |
 | `ui_texture_aspect_w_over_h` | f32 or null | Aspect (width / height) at which the render target lands undistorted on the entity's display faces, measured in TEXTURE space on its `$RenderToTexture` faces: the length of ∂P/∂u over that of ∂P/∂v, area-weighted (`screen_aspect::render_target_texture_aspect`). Measured for interior placements of operating panels (door, light and transit panels, kiosks). When set, the render takes this aspect with the authored canvas's pixel area (`aspectOverrides*` canvases reflow; a 16:9 door canvas on a 9:16 pad renders 1080 × 1920) and it takes precedence over `ui_screen_aspect_w_over_h`. Part of the render identity. |
 | `user_variables` | array | The UI owner's user variables (`UserVariablesComponentParams`: `bools`, `ints`, `floats`, `strings`, `locStrings`, in that order), with the placement's `.soc` instance values (`EntityComponentUserVariables`, by array and `__index`) applied: `{"name", "value": {"type": "bool"\|"int"\|"float"\|"string"\|"loc", "value"}}`. Written for an operating panel (a `physical` binding of a resolved owner that is not a `Display` item, or is one with `source_kiosk_interaction`); the render pins each by name (a `loc` value localized). A C2 door pad hides its lock, sensor and light controls this way. Part of the render identity. |
-| `state_types` | array | The UI owner's interaction state machine (`SInteractionStateMachineParams` state types bound by state): `{"name", "states", "default_state"}` (`default_state`: the type's `DefaultState`, else its first state). Every render pins `state.<name>.<state>` for every type (each in its default state, the one a state render names in that state). Operating panels only. |
-| `state_images` | array | Renders of the owner's other states the canvas binds (a `state.<type>.` path in the canvas or a canvas it embeds), one state type away from the default: `{"state_type", "state", "generated_image_path"}`. A render identical to the default is not written. A door pad carries `DoorOpenState` `DoorOpened` / `DoorOpening` / `DoorClosing`, `DoorLockState` `DoorLocked`, `PowerState` `PowerLow` / `PowerLost`, `OverrideableState` `CanOverride` when they differ. |
+| `state_types` | array | The UI owner's interaction state machine (`SInteractionStateMachineParams` state types bound by state): `{"name", "states", "default_state", "transitions", "linked"}` (`default_state`: the type's `DefaultState`, else its first state). Cache format 39: `transitions` — the owner's own interactions that set a state of this type, `[{"interaction", "state"}]` (`States[].Interactions[]`: the shared interaction's `Name` → its `NextState`; distinct pairs in authored order, from whichever state); `linked` — a linked entity's state tags that set a state of this type, `[{"tag", "state"}]` (`SLinkedInteractionStateChangedStateModifier.onChangeStateTagStates[]`, one entry per tag; `tag` the full tag name, or the tag's id when the tag database does not name it). The C2 light panel's `LightSwitchState`: transitions `LightsOn` → `LightSwitchOn`, `LightsOff` → `LightSwitchOff`, `LightsLow` → `LightSwitchLow`, `LightsAlarm` → `LightSwitchAlarm`, linked `/State/LightSwitch/Default` → `LightSwitchOn` … `/State/LightSwitch/Emergency` → `LightSwitchAlarm`; its `LightState`: no transitions, linked `/State/LightGroup/Default` → `LightsOn`, `/State/LightGroup/Off` → `LightsOff`, `/State/LightGroup/Auxiliary` → `LightsLow`, `/State/LightGroup/Emergency` → `LightsAlarm`. Every render pins `state.<name>.<state>` for every type (each in its default state, those a state render names in that state). Operating panels only. |
+| `state_images` | array | Renders of the owner's other states the canvas binds (a `state.<type>.` path in the canvas or a canvas it embeds), one state type away from the default: `{"state_type", "state", "states", "generated_image_path"}`. A render identical to the default is not written. A door pad carries `DoorOpenState` `DoorOpened` / `DoorOpening` / `DoorClosing`, `DoorLockState` `DoorLocked`, `PowerState` `PowerLow` / `PowerLost`, `OverrideableState` `CanOverride` when they differ. Cache format 39: `states` lists every pinned state, `[{"state_type", "state"}]` (one entry for these single-state renders); after the singles come the **combined** renders, `{"states": [two pins], "generated_image_path"}` without `state_type` / `state`: one non-default state of each of two different state types the canvas binds, each a state whose own `state.<type>.<state>` path the canvas reads and whose single-state render differs from the default (a state that changes nothing alone is not combined: render cost. On the C2 this keeps 85 pair renders of 702; the one combination class it loses is a door pad's `PowerState` `PowerLost` + `OverrideableState` `CanOverride`, whose override control shows only when both hold), written only when the image differs from the default and from every single-state image (file stem: the single stem with a second `__<type>_<state>`, types in state-machine order). The C2 light panel adds `LightState` `LightsAlarm` + `LightSwitchState` `LightSwitchAlarm` (only the Emergency row selected) and `LightsAlarm` + `LightSwitchLow`; `LightsLow` alone changes nothing on that canvas, so `LightsLow` + `LightSwitchLow` is not combined (rendered, it shows nothing a single-state image does not). A consumer matches `states` as a set against the owner's non-default states, else falls back to a single-state entry. |
+| `image_size_px` | `[u32, u32]` or null | Cache format 39: `[width, height]` in pixels of the generated images (default and `state_images`): the space of `buttons[].rect_px`. `null` when no image was generated. |
+| `buttons` | array | Cache format 39: the default render's clickable regions, `[{"node", "interaction", "rect_px": [x, y, w, h]}]` in node order: every canvas node whose `interactions` allow a click (`canInteract`, not `disabled`), that is active with all its ancestors, and whose `onLeftClick` holds `BuildingBlocks_TriggerURL` actions — one entry per action, `interaction` its `name` (the owner's shared interaction the click fires), `node` the node's `name`, `rect_px` its laid-out rectangle in `image_size_px` pixels (origin top left). The C2 light panel (`720 × 1280`): `OnLightsButton` → `LightsOn`, `AuxLightsButton` → `LightsLow`, `EmergencyLightsButton` → `LightsAlarm`. Empty when none or no image was generated. Not part of the render identity. |
 
 The `generated_*` fields are filled only when the render succeeds; a failed
 render logs a warning and leaves them `null`.
