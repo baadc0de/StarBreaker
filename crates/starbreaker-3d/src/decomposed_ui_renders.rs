@@ -5,9 +5,8 @@
 //!   owner's user variables, and the owner state the render pins).
 //! - [`prerender_ui_bindings`]: renders every distinct default identity once, in parallel, plus the owner's other
 //!   states the canvas binds (one state type away from the default: `canvas_state_paths` × `UiBinding::state_types`)
-//!   and then the pairs of such states of two different bound types ([`bound_state_pairs`]: states whose own paths
-//!   the canvas reads and whose single render differs from the default), and assigns each identity a file stem
-//!   ([`UiRenders::stem`]).
+//!   and every pair of such states of two different bound types ([`bound_state_pairs`]; pairs the canvas cannot tell
+//!   apart share one render, [`render_class`]), and assigns each identity a file stem ([`UiRenders::stem`]).
 //! - [`state_image_stem`] / [`states_image_stem`]: the file stem of a state render (a pair's stem names both).
 //!
 //! Stems: the first identity with a given asset name (in binding order: children, then interior placements) keeps the
@@ -78,11 +77,19 @@ pub(super) struct UiRenders {
     pub(super) states: HashMap<UiRenderKey, Vec<(String, String)>>,
     /// Per default identity: the pairs of owner states (two types) rendered for it, in state-machine order.
     pub(super) pairs: HashMap<UiRenderKey, Vec<[(String, String); 2]>>,
+    /// A pair identity the canvas cannot tell from an earlier one (`render_class`) → that one: it shares its render
+    /// and file.
+    aliases: HashMap<UiRenderKey, UiRenderKey>,
     /// Every identity's file stem (defaults and states, allocated in one namespace).
     stems: StemAllocator,
 }
 
 impl UiRenders {
+    /// The render of identity `key` (through its alias, when it shares another's).
+    pub(super) fn render(&self, key: &UiRenderKey) -> Option<&Result<crate::ui_pipeline::UiRender, String>> {
+        self.renders.get(self.aliases.get(key).unwrap_or(key))
+    }
+
     /// The file stem of default identity `key` (of `binding`): the assigned one, else the binding's asset name with the
     /// key's hash (an identity rendered outside the pre-render).
     pub(super) fn stem(&self, key: &UiRenderKey, binding: &UiBinding) -> String {
@@ -98,7 +105,7 @@ impl UiRenders {
     pub(super) fn state_stem(&self, state_key: &UiRenderKey, stem: &str, states: &[(String, String)]) -> String {
         self.stems
             .by_key
-            .get(state_key)
+            .get(self.aliases.get(state_key).unwrap_or(state_key))
             .cloned()
             .unwrap_or_else(|| format!("{}_{}", states_image_stem(stem, states), key_hash(state_key)))
     }
@@ -152,46 +159,34 @@ pub(super) fn states_image_stem(stem: &str, states: &[(String, String)]) -> Stri
 }
 
 /// The pairs of owner states the combined renders pin: one non-default state of each of two different state types the
-/// canvas binds, each a state whose own `state.<type>.<state>` path the canvas reads (a state it does not read shows
-/// only as its type's default going false, which the single-state render already covers) and that `shows` something
-/// alone (its single-state render differs from the default; render cost: a state that changes nothing alone is not
-/// combined), in state-machine order.
+/// canvas binds (every such pair, as the single-state renders take every such state), in state-machine order.
 pub(super) fn bound_state_pairs(
     binding: &UiBinding,
     bound_paths: &std::collections::BTreeSet<String>,
-    shows: &dyn Fn(&str, &str) -> bool,
 ) -> Vec<[(String, String); 2]> {
-    let read: Vec<Vec<(String, String)>> = binding
-        .state_types
-        .iter()
-        .map(|state_type| {
-            state_type
-                .states
-                .iter()
-                .filter(|s| **s != state_type.default_state)
-                .filter(|s| {
-                    bound_paths.contains(&format!(
-                        "state.{}.{}",
-                        state_type.name.to_ascii_lowercase(),
-                        s.to_ascii_lowercase()
-                    ))
-                })
-                .filter(|s| shows(&state_type.name, s))
-                .map(|s| (state_type.name.clone(), s.clone()))
-                .collect()
-        })
-        .collect();
+    let variants = bound_state_variants(binding, bound_paths);
     let mut pairs = Vec::new();
-    for (i, first) in read.iter().enumerate() {
-        for second in &read[i + 1..] {
-            for a in first {
-                for b in second {
-                    pairs.push([a.clone(), b.clone()]);
-                }
+    for (i, a) in variants.iter().enumerate() {
+        for b in &variants[i + 1..] {
+            if a.0 != b.0 {
+                pairs.push([a.clone(), b.clone()]);
             }
         }
     }
     pairs
+}
+
+/// What the canvas sees of a pinned pair: each state type with its state when the canvas reads that state's own
+/// `state.<type>.<state>` path, else none (an unread state shows only as its type's default going false, the same for
+/// every unread state of the type). Pairs of one class render identically, so one render serves them all.
+pub(super) fn render_class(
+    pair: &[(String, String); 2],
+    bound_paths: &std::collections::BTreeSet<String>,
+) -> [(String, Option<String>); 2] {
+    pair.clone().map(|(state_type, state)| {
+        let read = bound_paths.contains(&format!("state.{}.{}", state_type.to_ascii_lowercase(), state.to_ascii_lowercase()));
+        (state_type, read.then_some(state))
+    })
 }
 
 /// The owner states `binding`'s canvas binds, other than each type's default: the state renders it gets.
@@ -282,31 +277,39 @@ pub(super) fn prerender_ui_bindings(
     let defaults = jobs.iter().filter(|(_, _, s)| s.is_empty()).count();
     let singles = jobs.len() - defaults;
     out.renders = render(&jobs).into_iter().collect();
-    // Then the pairs of states that each show something alone (their single render differs from the default).
+    // Then every pair of states of two bound types; the pairs the canvas cannot tell apart share one render.
     let mut pair_jobs: Vec<(UiRenderKey, &UiBinding, Vec<(String, String)>)> = Vec::new();
+    let mut pair_count = 0;
     for (key, binding) in &representatives {
-        let (Some(Ok(default)), Some(paths)) = (
-            out.renders.get(key),
-            paths_by_canvas.get(&(binding.canvas_guid.clone(), binding.content_canvas_guid.clone())),
-        ) else {
+        let Some(paths) = paths_by_canvas.get(&(binding.canvas_guid.clone(), binding.content_canvas_guid.clone())) else {
             continue;
         };
-        let shows = |state_type: &str, state: &str| {
-            matches!(out.renders.get(&ui_render_key(binding, &[(state_type, state)])), Some(Ok(r)) if r.png != default.png)
-        };
-        let pairs = bound_state_pairs(binding, paths, &shows);
+        let pairs = bound_state_pairs(binding, paths);
         let stem = out.stems.by_key.get(key).cloned().unwrap_or_default();
+        let mut by_class: HashMap<[(String, Option<String>); 2], UiRenderKey> = HashMap::new();
         for pair in &pairs {
             let pins: Vec<(&str, &str)> = pair.iter().map(|(t, s)| (t.as_str(), s.as_str())).collect();
             let pair_key = ui_render_key(binding, &pins);
-            out.stems.assign(&pair_key, states_image_stem(&stem, pair));
-            pair_jobs.push((pair_key, binding, pair.to_vec()));
+            match by_class.get(&render_class(pair, paths)) {
+                Some(shared) => {
+                    out.aliases.insert(pair_key, shared.clone());
+                }
+                None => {
+                    by_class.insert(render_class(pair, paths), pair_key.clone());
+                    out.stems.assign(&pair_key, states_image_stem(&stem, pair));
+                    pair_jobs.push((pair_key, binding, pair.to_vec()));
+                }
+            }
         }
+        pair_count += pairs.len();
         if !pairs.is_empty() {
             out.pairs.insert(key.clone(), pairs);
         }
     }
-    log::info!("[ui] renders: {defaults} default, {singles} single-state, {} state-pair", pair_jobs.len());
+    log::info!(
+        "[ui] renders: {defaults} default, {singles} single-state, {} state-pair (for {pair_count} pairs)",
+        pair_jobs.len()
+    );
     out.renders.extend(render(&pair_jobs));
     out
 }
@@ -334,9 +337,11 @@ mod tests {
         assert_eq!(pairs, [("TypeA", "A1"), ("TypeA", "A2"), ("TypeB", "B0")]);
     }
 
-    /// scviewer C2 fixes: the combined renders pin one read non-default state of each of two different bound types.
+    /// scviewer C2 fixes review: the combined renders cover every non-default state of each of two different bound
+    /// types (TypeC, its own non-default state unread, included); the pairs of states the canvas does not tell apart
+    /// (unread states of one type) share one render.
     #[test]
-    fn state_pairs_combine_read_states_of_two_types() {
+    fn state_pairs_cover_every_non_default_state_of_two_bound_types() {
         let ty = |name: &str, states: &[&str]| UiStateType {
             name: name.into(),
             states: states.iter().map(|s| s.to_string()).collect(),
@@ -344,20 +349,23 @@ mod tests {
             ..Default::default()
         };
         let binding = UiBinding {
-            state_types: vec![ty("TypeA", &["A0", "A1", "A2"]), ty("TypeB", &["B0", "B1"]), ty("TypeC", &["C0", "C1"])],
+            state_types: vec![
+                ty("TypeA", &["A0", "A1", "A2", "A3"]),
+                ty("TypeB", &["B0", "B1"]),
+                ty("TypeC", &["C0", "C1"]),
+                ty("Unbound", &["U0", "U1"]),
+            ],
             ..Default::default()
         };
-        // TypeA reads A1 and A2, TypeB reads B1, TypeC reads only its default.
+        // TypeA reads A1 (A2, A3 unread), TypeB reads B1, TypeC reads only its default; Unbound is not read at all.
         let paths: std::collections::BTreeSet<String> =
-            ["state.typea.a1", "state.typea.a2", "state.typeb.b1", "state.typec.c0"].into_iter().map(String::from).collect();
-        let owned = bound_state_pairs(&binding, &paths, &|_, _| true);
-        let pairs: Vec<[(&str, &str); 2]> = owned
-            .iter()
-            .map(|[a, b]| [(a.0.as_str(), a.1.as_str()), (b.0.as_str(), b.1.as_str())])
-            .collect();
-        assert_eq!(pairs, [[("TypeA", "A1"), ("TypeB", "B1")], [("TypeA", "A2"), ("TypeB", "B1")]]);
-        let shown_only = bound_state_pairs(&binding, &paths, &|_, s| s != "A2");
-        assert_eq!(shown_only.len(), 1, "a state that shows nothing alone is not combined");
+            ["state.typea.a1", "state.typeb.b1", "state.typec.c0"].into_iter().map(String::from).collect();
+        let owned = bound_state_pairs(&binding, &paths);
+        let pairs: Vec<String> = owned.iter().map(|[a, b]| format!("{}+{}", a.1, b.1)).collect();
+        assert_eq!(pairs, ["A1+B1", "A1+C1", "A2+B1", "A2+C1", "A3+B1", "A3+C1", "B1+C1"]);
+        let class = |p: &[(String, String); 2]| render_class(p, &paths);
+        assert_eq!(class(&owned[2]), class(&owned[4]), "A2 and A3 are unread: one render");
+        assert_ne!(class(&owned[0]), class(&owned[2]), "A1 is read");
         let pair = [("TypeA".to_string(), "A1".to_string()), ("TypeB".to_string(), "B1".to_string())];
         assert_eq!(states_image_stem("pad", &pair), "pad__typea_a1__typeb_b1");
         assert_ne!(ui_render_key(&binding, &[("TypeA", "A1"), ("TypeB", "B1")]), ui_render_key(&binding, &[("TypeA", "A1")]));

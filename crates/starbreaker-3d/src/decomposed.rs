@@ -3548,7 +3548,7 @@ fn generated_ui_binding_record(
                 let pin_refs: Vec<(&str, &str)> = pins.iter().map(|(t, s)| (t.as_str(), s.as_str())).collect();
                 let state_key = ui_render_key(&binding, &pin_refs);
                 let label = || pins.iter().map(|(t, s)| format!("{t}.{s}")).collect::<Vec<_>>().join("+");
-                match render_cache.renders.get(&state_key) {
+                match render_cache.render(&state_key) {
                     Some(Ok(state_render)) => {
                         let state_png = &state_render.png;
                         let single = pins.len() == 1;
