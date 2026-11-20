@@ -468,11 +468,13 @@ fn resolve_sub_geometry(idx: &EntityIndex, children: &mut [LoadoutNode]) {
 
     // Second pass: for unmatched children, assign the variant not claimed by siblings.
     for &ui in &unmatched {
-        if !should_use_unclaimed_sub_geometry_fallback(children[ui].geometry_path.as_deref()) {
+        let same_entity_siblings =
+            children.iter().enumerate().filter(|(j, c)| *j != ui && c.entity_name == children[ui].entity_name).count();
+        if !should_use_unclaimed_sub_geometry_fallback(children[ui].geometry_path.as_deref(), same_entity_siblings) {
             log::debug!(
-                "  SubGeometry: {} kept default geometry {} after selector miss",
+                "  SubGeometry: {} kept default geometry {:?} after selector miss",
                 children[ui].entity_name,
-                children[ui].geometry_path.as_deref().unwrap_or("")
+                children[ui].geometry_path.as_deref()
             );
             continue;
         }
@@ -504,8 +506,13 @@ fn should_attempt_sub_geometry_resolution(
     geometry_path.is_some() || !variants.is_empty()
 }
 
-fn should_use_unclaimed_sub_geometry_fallback(geometry_path: Option<&str>) -> bool {
-    geometry_path.is_none()
+/// Whether an item whose port selected none of its SubGeometry variants takes a variant its identical siblings have
+/// not taken: only when it has no default geometry and shares its entity with siblings (a set of identical items
+/// spread over the variants). A lone item keeps its default geometry, none when it has none: the engine renders the
+/// record's root geometry when no variant tag is selected, and an unselected variant (a magazine's `tableDisplay` /
+/// `empty` states) is not that.
+fn should_use_unclaimed_sub_geometry_fallback(geometry_path: Option<&str>, same_entity_siblings: usize) -> bool {
+    geometry_path.is_none() && same_entity_siblings > 0
 }
 
 fn has_multiple_geometry_variants(variants: &[SubGeometryVariant]) -> bool {
@@ -1112,10 +1119,42 @@ mod tests {
 
     #[test]
     fn unclaimed_sub_geometry_fallback_preserves_default_geometry() {
-        assert!(!should_use_unclaimed_sub_geometry_fallback(Some(
-            "Objects/fps_weapons/attachments/magazines/behr/mgzn_s03_behr_5rb_01.cgf"
-        )));
-        assert!(should_use_unclaimed_sub_geometry_fallback(None));
+        assert!(!should_use_unclaimed_sub_geometry_fallback(
+            Some("Objects/fps_weapons/attachments/magazines/behr/mgzn_s03_behr_5rb_01.cgf"),
+            1
+        ));
+        assert!(should_use_unclaimed_sub_geometry_fallback(None, 1));
+    }
+
+    /// scviewer C2 fixes: the unclaimed-variant fallback shares variants among identical siblings; a lone item whose
+    /// port selects none of its variants and that has no default geometry takes none (the engine renders its empty
+    /// default geometry), not an arbitrary variant.
+    #[test]
+    fn a_lone_item_without_a_selected_variant_takes_no_geometry() {
+        assert!(!should_use_unclaimed_sub_geometry_fallback(None, 0));
+    }
+
+    /// LIVE 4.10.2: the fire extinguisher in a C2 cabinet carries its magazine (`kegr_fire_extinguisher_01_mag`), whose
+    /// only geometry is two situational SubGeometry variants (`tableDisplay`, `empty`) its port's tags do not select:
+    /// it places no mesh (skipped without a Data.p4k).
+    #[test]
+    fn live_extinguisher_magazine_without_a_selected_variant_has_no_geometry() {
+        let Ok(found) = starbreaker_common::discover::find_p4k() else {
+            eprintln!("skipping: no Data.p4k installed");
+            return;
+        };
+        let p4k = starbreaker_p4k::MappedP4k::open(found.path).unwrap();
+        let dcb = p4k.read_file("Data\\Game2.dcb").or_else(|_| p4k.read_file("Data\\Game.dcb")).unwrap();
+        let db = Database::from_bytes(&dcb).unwrap();
+        let idx = EntityIndex::new(&db);
+        let cabinet = idx.find_record("Gadget_Cabinet_kegr_fire_extinguisher_01_hightech_med_high").unwrap();
+        let tree = resolve_loadout_indexed(&idx, cabinet);
+        let extinguisher = &tree.root.children[0];
+        assert_eq!(extinguisher.entity_name, "kegr_fire_extinguisher_01");
+        assert!(extinguisher.geometry_path.is_some(), "the extinguisher keeps its own geometry");
+        let magazine = extinguisher.children.iter().find(|c| c.item_port_name == "magazine_attach").expect("magazine");
+        assert_eq!(magazine.entity_name, "kegr_fire_extinguisher_01_mag");
+        assert_eq!(magazine.geometry_path, None);
     }
 }
 
