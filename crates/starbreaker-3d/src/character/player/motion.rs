@@ -7,6 +7,10 @@ pub(super) fn resolve<'a>(
     tags: &[String],
     frag_tags: &[String],
 ) -> Option<&'a Value> {
+    fragments.iter().find(|fragment| matches_query(fragment, name, tags, frag_tags))
+}
+
+pub(super) fn matches_query(f: &Value, name: &str, tags: &[String], frag_tags: &[String]) -> bool {
     let strings = |v: &Value| {
         v.as_array()
             .into_iter()
@@ -14,11 +18,9 @@ pub(super) fn resolve<'a>(
             .filter_map(|s| s.as_str().map(str::to_owned))
             .collect::<Vec<_>>()
     };
-    fragments.iter().find(|f| {
-        f["fragment"].as_str().is_some_and(|s| s.eq_ignore_ascii_case(name))
-            && subset(&strings(&f["tags"]), tags)
-            && subset(&strings(&f["frag_tags"]), frag_tags)
-    })
+    f["fragment"].as_str().is_some_and(|s| s.eq_ignore_ascii_case(name))
+        && subset(&strings(&f["tags"]), tags)
+        && subset(&strings(&f["frag_tags"]), frag_tags)
 }
 
 use super::{
@@ -102,7 +104,18 @@ pub(super) fn adb(
             allowed.intersection(&names).cloned().collect()
         };
         if !eligible.is_empty() {
+            let start = out.len();
             adb(p4k, sub.attr("File"), &eligible, tags, seen, out, docs)?;
+            let inherited = words(sub.attr("Tags"));
+            for fragment in &mut out[start..] {
+                if let Some(tags) = fragment["tags"].as_array_mut() {
+                    for tag in &inherited {
+                        if !tags.iter().any(|t| t.as_str().is_some_and(|s| s.eq_ignore_ascii_case(tag))) {
+                            tags.push(json!(tag));
+                        }
+                    }
+                }
+            }
         }
     }
     for group in root
@@ -122,7 +135,7 @@ pub(super) fn adb(
                     if node.tag == "Blend" {
                         blend = node.clone();
                     } else if node.tag == "Animation" && !node.attr("name").is_empty() {
-                        layers.push(json!({"animation":node.attr("name").to_ascii_lowercase(),"layer":index,
+                        layers.push(json!({"animation":node.attr("name").to_ascii_lowercase(),"layer":index,"flags":words(node.attr("flags")),
                         "loop":words(node.attr("flags")).iter().any(|s|s=="Loop"),"speed":node.number("speed",1.0)?,
                         "blend_in":blend.number("Duration",0.0)?,"blend_out":f.number("BlendOutDuration",0.0)?,
                         "exit_time":blend.number("ExitTime",0.0)?,"start_time":blend.number("StartTime",0.0)?,
@@ -130,10 +143,32 @@ pub(super) fn adb(
                     }
                 }
             }
-            out.push(json!({"fragment":group.tag,"guid":f.attr("GUID"),"tags":words(f.attr("Tags")),"frag_tags":words(f.attr("FragTags")),"layers":layers,"source":path}));
+            let procedurals = procedurals(f)?;
+            out.push(json!({"fragment":group.tag,"guid":f.attr("GUID"),"tags":words(f.attr("Tags")),"frag_tags":words(f.attr("FragTags")),
+                "layers":layers,"procedurals":procedurals,"source":path}));
         }
     }
     Ok(())
+}
+
+fn procedurals(fragment: &Node) -> Result<Vec<Value>> {
+    fn parameters(node: &Node) -> Value {
+        json!({"name":node.tag,"attributes":node.attrs,"children":node.children.iter().map(parameters).collect::<Vec<_>>()})
+    }
+    let mut out = Vec::new();
+    for (index, layer) in fragment.children.iter().filter(|node| node.tag == "ProcLayer").enumerate() {
+        let mut blend = Node::default();
+        for node in &layer.children {
+            if node.tag == "Blend" {
+                blend = node.clone();
+            } else if node.tag == "Procedural" && !node.attr("type").is_empty() {
+                out.push(json!({"type":node.attr("type"),"layer":index,"blend":blend.number("Duration",0.0)?,
+                    "exit_time":blend.number("ExitTime",0.0)?,"start_time":blend.number("StartTime",0.0)?,
+                    "params":node.child("ProceduralParams").map(parameters)}));
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// Resolve every authored variant whose fragment-tag schema describes ground

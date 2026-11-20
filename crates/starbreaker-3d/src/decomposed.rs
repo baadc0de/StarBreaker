@@ -174,6 +174,7 @@ struct SceneInstanceRecord {
     door: Option<crate::types::DoorTiming>,
     /// The entity class's vehicle item-port interaction links.
     item_port_links: Vec<crate::types::ItemPortLink>,
+    seat_data: crate::pipeline::seat_records::ChildSeatRecords,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1527,7 +1528,8 @@ pub(crate) fn write_decomposed_export(
         }
     }
     let t_ui = ui_render_start.elapsed();
-    for (index, child) in input.children.iter().enumerate() {
+    let child_seats = crate::pipeline::seat_records::loadout_children(db, p4k, &input.entity_name, &input.children, opts.include_animations);
+    for (index, (child, seat_data)) in input.children.iter().zip(child_seats).enumerate() {
         let child_material_view = build_decomposed_material_view(
             &child.mesh,
             child.materials.as_ref(),
@@ -1645,6 +1647,7 @@ pub(crate) fn write_decomposed_export(
             ui_bindings,
             door: child.door.clone(),
             item_port_links: child.item_port_links.clone(),
+            seat_data,
         });
 
         if child_count > 0 {
@@ -2176,9 +2179,25 @@ pub(crate) fn write_decomposed_export(
 
     let root_animations = if opts.include_animations {
         let mut collection = crate::animation::rig_sources::ClipCollection::default();
-        for source in &input.animation_sources {
-            for clip in crate::animation::rig_sources::read_source_clips(p4k, source, false).into_iter().flatten() {
-                collection.append(source, clip);
+        let dashboard_controllers: HashMap<_, _> = child_instances.iter()
+            .filter_map(|instance| {
+                let dashboard = &instance.seat_data.seat.as_ref()?["dashboard"];
+                let port = dashboard["port"].as_str()?;
+                let item = child_instances.iter().find(|child| {
+                    child.port_path.as_ref().is_some_and(|path| path.len() == 1 && path[0].eq_ignore_ascii_case(port))
+                })?;
+                Some((item.entity_name.as_str(), crate::animation::AnimationControllerSource {
+                    animation_database: dashboard["adb"].as_str()?.to_owned(),
+                    animation_controller: dashboard["controller"].as_str()?.to_owned(),
+                }))
+            }).collect();
+        for original in &input.animation_sources {
+            let mut source = original.clone();
+            if let Some(controller) = dashboard_controllers.get(source.owner_entity.as_str()) {
+                source.controller = Some(controller.clone());
+            }
+            for clip in crate::animation::rig_sources::read_source_clips(p4k, &source, false).into_iter().flatten() {
+                collection.append(&source, clip);
             }
         }
         let mut clips: Vec<serde_json::Value> = collection.clips.into_iter().map(|clip| clip.value).collect();
@@ -2596,6 +2615,9 @@ fn scene_instance_json(instance: &SceneInstanceRecord) -> serde_json::Value {
         "item_type": instance.item_type,
         "door": instance.door,
         "item_port_links": instance.item_port_links,
+        "interaction_points": instance.seat_data.interaction_points,
+        "seat": instance.seat_data.seat,
+        "seat_access": instance.seat_data.access,
         "ui_bindings": instance.ui_bindings.iter().map(ui_binding_json).collect::<Vec<_>>(),
     })
 }
@@ -8196,6 +8218,7 @@ mod tests {
                 target_port: "port_a".into(),
                 target_slot: "In".into(),
             }],
+            seat_data: crate::pipeline::seat_records::ChildSeatRecords::default(),
         };
         assert!(scene_instance_json(&child).as_object().unwrap().contains_key("item_type"));
         assert_eq!(scene_instance_json(&child)["item_type"], "Seat");

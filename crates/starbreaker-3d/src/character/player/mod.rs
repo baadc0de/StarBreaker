@@ -11,9 +11,13 @@ mod xml;
 mod tests;
 
 mod export;
+mod action_clips;
 mod fire;
 mod flashlight;
 mod loadouts;
 mod sources;
+mod seat_motion;
 pub use export::export_player;
+pub use action_clips::{PlayerClipsRequest, export_player_clips};
+pub(crate) use seat_motion::SeatMotion;
 pub use loadouts::{PlayerLoadout, PlayerRequest, player_loadouts};

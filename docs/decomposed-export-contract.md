@@ -1837,3 +1837,31 @@ spread and focus (bus `lpf` / `hpf` / `output_bus_lpf` / `output_bus_hpf` curves
 mapping), compressor and RoomVerb / delay effects, bus-to-bus ducks (`ducks`; none target the C2 / hangar chains),
 state groups (the game sets states at run time; `state_bypass` names those that switch an effect), LFO modulators, switch values other than the default, and the two zero words at offset 40 of an
 impulse-response header.
+## Cockpit seats and access points (WP-P6)
+
+Loadout children may carry `interaction_points`, `seat`, and `seat_access`.
+Interaction points use the same shape as interior points. A child helper's
+matrix is published in the child's CryEngine geometry frame (column-major,
+metres). Authored angular limits are degrees. The point overrides its shared
+interaction's display name when the point authors a nonempty localization key.
+
+`seat` describes an `SCItemSeatParams` child. It includes its class,
+transition, and control templates, attachment, look limits, dashboard controller,
+camera, usable exit-validation rule, IK targets and ordered player fragments.
+`can_drive` is read from the vehicle XML's user FlightController priority
+routing. A missing routing definition leaves it null. The dashboard's port is
+resolved through the seat controller's usable group tags and used to annotate
+that dashboard's animation clips from its authored ADB.
+
+`seat_access.entrances` carries authored conditions, linked gateways, enter and
+exit transitions, and the resolved `seat_port_path` under the same loadout
+owner. A missing target remains null. `seat.user_fragments` identifies the
+resolved player ADB fragment and requested tags for each state and look layer.
+SubADB tags constrain resolution and are retained on their fragments.
+`layers[].animation` names a logical player clip, and `procedurals` retains the
+authored type, blend and parameter tree.
+
+The separate player-clip archive has `Packages/player_clips/scene.json` first,
+with the skeleton identity, unsupported or missing requests and the usual
+`root_entity.animations` index and sidecars. It contains no mesh or texture
+dependencies. Clip names are requested as a deduplicated, case-insensitive set.

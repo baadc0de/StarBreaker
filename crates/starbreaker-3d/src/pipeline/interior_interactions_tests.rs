@@ -50,11 +50,22 @@ fn interaction_points_keep_their_interactions_in_order() {
                 vec![
                     ("HelperName", Value::String("$proxy_elevator_button")),
                     ("Radius", Value::Float(1.6)),
+                    ("AngleConstraint", object("SInteractionPointAngleConstraint", vec![
+                        ("angleRange", Value::Float(150.0)),
+                        ("viewAngleLimit", Value::Float(100.0)),
+                    ])),
                     (
                         "Interactions",
                         Value::Array(vec![
                             object("SInteractionParams", vec![("Interaction", shared("RequestFloor1")), ("DisplayName", Value::Locale("@innerthought_lift_top_deck")), ("IsPrimary", Value::Bool(true))]),
-                            object("SInteractionParams", vec![("Interaction", shared("RequestFloor0")), ("IsPrimary", Value::Bool(false))]),
+                            object("SInteractionParams", vec![
+                                ("Interaction", object("SSharedInteractionParams", vec![
+                                    ("Name", Value::String("RequestFloor0")),
+                                    ("DisplayName", Value::Locale("@fixture_shared_prompt")),
+                                ])),
+                                ("DisplayName", Value::Locale("@LOC_EMPTY")),
+                                ("IsPrimary", Value::Bool(false)),
+                            ]),
                             object("SInteractionParams", vec![("Interaction", Value::Null)]),
                         ]),
                     ),
@@ -66,10 +77,13 @@ fn interaction_points_keep_their_interactions_in_order() {
     assert_eq!(points.len(), 1);
     assert_eq!(points[0].helper_name, "$proxy_elevator_button");
     assert_eq!(points[0].radius, Some(1.6));
+    assert_eq!(points[0].angle_range, Some(150.0));
+    assert_eq!(points[0].view_angle_limit, Some(100.0));
     let names: Vec<_> = points[0].interactions.iter().map(|i| i.name.as_str()).collect();
     assert_eq!(names, ["RequestFloor1", "RequestFloor0"], "an interaction without a target is not offered");
     assert!(points[0].interactions[0].primary);
     assert_eq!(points[0].interactions[0].display_name_key.as_deref(), Some("@innerthought_lift_top_deck"));
+    assert_eq!(points[0].interactions[1].display_name_key.as_deref(), Some("@fixture_shared_prompt"));
 }
 
 /// Synthetic `SCItemDoorParams` (structure only): the rest state and the polymorphic animation struct's type and
