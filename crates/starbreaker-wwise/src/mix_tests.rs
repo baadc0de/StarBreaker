@@ -138,6 +138,22 @@ fn a_slot_bypassed_by_state_names_its_state_groups() {
     assert_eq!(fx.state_bypass, vec![StateBypass { group: 77, states: vec![6] }], "slot 0 is bypassed in state 6 only");
 }
 
+#[test]
+fn state_offsets_use_the_v154_type_flags_and_preserve_signed_values() {
+    use crate::hirc::rtpc::{StateEntry, StateGroup, StateProp};
+    let mut chunk = StateChunk::default();
+    for (property_id, accum_type, in_db) in [(0, 2, 1), (1, 2, 0), (2, 6, 0), (3, 2, 0), (4, 2, 1)] {
+        chunk.state_props.push(StateProp { property_id, accum_type, in_db });
+    }
+    let mut entry = StateEntry { state_id: 11, properties: Default::default() };
+    entry.properties.props = vec![(0, -3.0), (1, -200.0), (2, 30.0), (3, 5.0), (4, -12.0), (0x30, 1.0)];
+    chunk.state_groups.push(StateGroup { group_id: 7, sync_type: 0, states: vec![entry] });
+    assert_eq!(state_values(&chunk), vec![StateValue {
+        group: 7, state: 11, volume_db: -3.0, pitch_cents: -200.0, lpf: 30.0, bus_volume_db: -12.0,
+        ..StateValue::default()
+    }]);
+}
+
 /// A gain curve on a game parameter the ATL does not name still has a default: the Wwise game parameter's own
 /// (Init.bnk STMG). The static bus level includes the curve at that default (one resolver for every default).
 #[test]

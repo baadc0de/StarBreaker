@@ -13,6 +13,7 @@ use serde::Serialize;
 use crate::convolution::ConvolutionParams;
 use crate::hirc::attenuation::{Attenuation, AttenuationCurveSlot};
 use crate::hirc::props::prop_id;
+use crate::hirc::rtpc::StateChunk;
 use crate::hirc::HircObject;
 use crate::playable::{Resolver, RtpcCurve};
 
@@ -244,11 +245,62 @@ pub struct BusOut {
     /// RTPCs with a volume curve on this bus but no default (not applied).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub rtpc_without_default: Vec<String>,
-    /// State groups with property offsets on this bus (applied only while the game sets that state; not modelled).
+    /// State groups affecting this bus, including effect-slot switches.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub state_groups: Vec<u32>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub state_values: Vec<StateValue>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub effects: Vec<EffectOut>,
+}
+
+/// Authored offsets for one state's supported v154 properties. The other group states contribute zero.
+#[derive(Debug, Clone, Default, Serialize, PartialEq)]
+pub struct StateValue {
+    pub group: u32,
+    pub state: u32,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub volume_db: f32,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub bus_volume_db: f32,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub pitch_cents: f32,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub lpf: f32,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub hpf: f32,
+}
+
+/// The property IDs in these chunks use the v154 RTPC table. Check the flags as well as the ID;
+/// effect-bypass and other unrelated properties are handled by their own consumers.
+pub(crate) fn state_values(chunk: &StateChunk) -> Vec<StateValue> {
+    let mut out = Vec::new();
+    for group in &chunk.state_groups {
+        for state in &group.states {
+            let mut row = StateValue { group: group.group_id, state: state.state_id, ..StateValue::default() };
+            let mut any = false;
+            for &(id, value) in &state.properties.props {
+                if !value.is_finite() || value == 0.0 {
+                    continue;
+                }
+                let Some(prop) = chunk.state_props.iter().find(|p| p.property_id == u32::from(id)) else { continue };
+                let Ok(id) = u8::try_from(id) else { continue };
+                match (id, prop.accum_type, prop.in_db) {
+                    (prop_id::VOLUME, 2, 1) => row.volume_db = value,
+                    (prop_id::BUS_VOLUME, 2, 1) => row.bus_volume_db = value,
+                    (prop_id::PITCH, 2, 0) => row.pitch_cents = value,
+                    (prop_id::LPF, 6, 0) => row.lpf = value,
+                    (prop_id::HPF, 6, 0) => row.hpf = value,
+                    _ => continue,
+                }
+                any = true;
+            }
+            if any {
+                out.push(row);
+            }
+        }
+    }
+    out
 }
 
 fn is_zero(v: &f32) -> bool {
@@ -360,6 +412,7 @@ pub fn bus_chain(resolver: &Resolver<'_, '_>, bus: u32) -> Vec<(u32, BusOut)> {
                 rtpc_default_db,
                 rtpc_without_default,
                 state_groups: object.state_chunk.state_groups.iter().map(|g| g.group_id).collect(),
+                state_values: state_values(&object.state_chunk),
                 effects,
             },
         ));

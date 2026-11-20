@@ -23,6 +23,7 @@ use crate::hirc::props::prop_id;
 use crate::hirc::rtpc::InitialRtpc;
 use crate::hirc::HircObject;
 use crate::library::{AudioLibrary, LoadedBank};
+use crate::mix::{StateValue, state_values};
 
 /// One RTPC curve on a node or bus: game parameter → property.
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -69,6 +70,8 @@ pub struct Props {
     pub random: Vec<(String, f32, f32)>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub rtpc: Vec<RtpcCurve>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub state_values: Vec<StateValue>,
 }
 
 fn is_zero(v: &f32) -> bool {
@@ -475,6 +478,7 @@ impl<'l, 'p> Resolver<'l, 'p> {
             initial_delay_s: f(prop_id::INITIAL_DELAY),
             random,
             rtpc: self.curves(&base.rtpc),
+            state_values: state_values(&base.state_chunk),
         }
     }
 
@@ -524,6 +528,7 @@ impl<'l, 'p> Resolver<'l, 'p> {
             sum.initial_delay_s += p.initial_delay_s;
             sum.random.extend(p.random);
             sum.rtpc.extend(p.rtpc);
+            sum.state_values.extend(p.state_values);
         }
         sum
     }
