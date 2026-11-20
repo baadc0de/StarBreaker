@@ -1801,6 +1801,14 @@ mod tests {
             assert_eq!(pad.len(), 1, "{class}");
             assert_eq!(pad[0].interaction_distance, Some(15.0), "{class}");
         }
+        // The inline-canvas path takes the distance from the resolved owner's class, not from the canvas; an
+        // unresolved owner has none.
+        let owner = <starbreaker_common::CigGuid as std::str::FromStr>::from_str("89508444-db7a-4f25-9abe-af3cfaa0893f").unwrap();
+        let owner_distance =
+            super::super::child_payload::entity_record_ui_interaction_distance(&db, db.record_by_id(&owner).unwrap());
+        assert!(owner_distance.is_some());
+        assert_eq!(hud[0].interaction_distance, owner_distance);
+        assert_eq!(unknown[0].interaction_distance, None);
     }
 
     fn test_ui_binding() -> UiBinding {
