@@ -560,7 +560,7 @@ impl<'l, 'p> Resolver<'l, 'p> {
 }
 
 /// The node base of a container or sound.
-pub(crate) fn node_base(object: &HircObject) -> Option<&NodeBaseParams> {
+pub fn node_base(object: &HircObject) -> Option<&NodeBaseParams> {
     match object {
         HircObject::Sound(s) => Some(&s.node_base),
         HircObject::RanSeqContainer(c) => Some(&c.node_base),
