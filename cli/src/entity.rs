@@ -430,6 +430,9 @@ pub enum EntityCommand {
         /// Write hierarchy JSON instead of GLB
         #[arg(long)]
         dump_hierarchy: bool,
+        /// Include authored animation clips (pass --animations=false to omit them)
+        #[arg(long, default_value_t = true, default_missing_value = "true", num_args = 0..=1, require_equals = true, action = clap::ArgAction::Set)]
+        animations: bool,
         #[command(flatten)]
         opts: ExportOpts,
     },
@@ -456,8 +459,9 @@ impl EntityCommand {
                 output,
                 p4k,
                 dump_hierarchy,
+                animations,
                 opts,
-            } => export(name, output, p4k, dump_hierarchy, opts),
+            } => export(name, output, p4k, dump_hierarchy, animations, opts),
             Self::Loadout { name, p4k } => loadout(name, p4k),
             Self::Validate { output } => validate(output),
         }
@@ -530,13 +534,14 @@ fn export(
     output: Option<PathBuf>,
     p4k_path: Option<PathBuf>,
     dump_hierarchy: bool,
+    animations: bool,
     opts: ExportOpts,
 ) -> Result<()> {
     // Blend assembly fills linked mesh placeholders; GLB assets are emitted directly.
     if opts.kind.to_lowercase() == "decomposed"
         && opts.format == crate::common::DecomposedFormat::Blend
     {
-        return export_blend(name, output, p4k_path, opts);
+        return export_blend(name, output, p4k_path, animations, opts);
     }
 
     crate::log_mem_stats("start");
@@ -559,7 +564,8 @@ fn export(
     }
 
     let idx = EntityIndex::new(&db);
-    let export_opts = starbreaker_3d::ExportOptions::from(&opts);
+    let mut export_opts = starbreaker_3d::ExportOptions::from(&opts);
+    export_opts.include_animations = animations;
     let output = output.unwrap_or_else(|| {
         match export_opts.kind {
             starbreaker_3d::ExportKind::Bundled => {
@@ -676,6 +682,7 @@ fn export_blend(
     name: String,
     output: Option<PathBuf>,
     p4k_path: Option<PathBuf>,
+    animations: bool,
     opts: ExportOpts,
 ) -> Result<()> {
     let (p4k, dcb_bytes) = load_dcb_bytes(p4k_path.as_deref(), None)?;
@@ -702,6 +709,7 @@ fn export_blend(
         let idx = EntityIndex::new(&db);
         let tree = resolve_loadout_indexed(&idx, record);
         let mut export_opts = starbreaker_3d::ExportOptions::from(&opts);
+        export_opts.include_animations = animations;
         export_opts.kind = starbreaker_3d::ExportKind::Decomposed;
 
         let output_dir = output.unwrap_or_else(|| PathBuf::from(&name));

@@ -40,6 +40,11 @@ struct PackedInteriorMeshKey {
     palette_hash: u64,
 }
 
+enum PackedInteriorMesh {
+    Flat(u32),
+    Rig(Vec<Option<u32>>),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct MaterialIdentity {
     material_json: String,
@@ -167,6 +172,9 @@ pub(crate) struct GlbBuilder {
     geometry_cache: HashMap<SceneGeometryReuseKey, PackedGeometryInfo>,
     /// Maps lowercased node/entity name → glTF node index.
     pub node_name_to_idx: HashMap<String, u32>,
+    /// Requested interior assets, indexed by their unique_cgfs entry, with one range per instance.
+    pub interior_animation_nodes: HashMap<usize, Vec<std::ops::Range<usize>>>,
+    pub skin_scopes: Vec<std::ops::Range<usize>>,
     /// Skinned geometry: POSITION accessor → the skin's joint names (bound to
     /// nodes per mesh node in `finalize`).
     skinned_geometry: HashMap<u32, Vec<String>>,
@@ -242,6 +250,8 @@ impl GlbBuilder {
             scene_mesh_cache: HashMap::new(),
             geometry_cache: HashMap::new(),
             node_name_to_idx: HashMap::new(),
+            interior_animation_nodes: HashMap::new(),
+            skin_scopes: Vec::new(),
             skinned_geometry: HashMap::new(),
             skins_json: Vec::new(),
             bone_bind: HashMap::new(),
@@ -647,6 +657,16 @@ impl GlbBuilder {
         (skin_sets, morph_targets)
     }
 
+    pub(super) fn rig_names(&self, nodes: std::ops::Range<usize>) -> HashMap<String, u32> {
+        let mut names = HashMap::new();
+        for node in nodes {
+            if let Some(name) = &self.nodes_json[node].name {
+                names.entry(name.to_lowercase()).or_insert(node as u32);
+            }
+        }
+        names
+    }
+
     /// Bind each node that renders skinned geometry to a glTF skin: joints are
     /// the skeleton nodes matched by name; a joint without a node gets an
     /// identity placeholder under the mesh node, and the anchor joint (for
@@ -659,6 +679,9 @@ impl GlbBuilder {
         if self.skinned_geometry.is_empty() {
             return;
         }
+        let scopes: Vec<_> = self.skin_scopes.iter()
+            .map(|range| (range.clone(), self.rig_names(range.clone())))
+            .collect();
         for node_idx in 0..self.nodes_json.len() {
             let Some(mesh) = self.nodes_json[node_idx].mesh else { continue };
             let position = self.meshes_json[mesh.value()]
@@ -668,13 +691,14 @@ impl GlbBuilder {
                 .map(|accessor| accessor.value() as u32);
             let Some(names) = position.and_then(|p| self.skinned_geometry.get(&p)).cloned() else { continue };
 
+            let names_to_nodes = scopes.iter().find(|(range, _)| range.contains(&node_idx))
+                .map_or(&self.node_name_to_idx, |(_, scope)| scope);
+            let resolved_joints: Vec<_> = names.iter().map(|name|
+                names_to_nodes.get(&name.to_lowercase()).copied()
+            ).collect();
             let mut joints: Vec<u32> = Vec::with_capacity(names.len() + 1);
-            for name in &names {
-                let resolved = self
-                    .node_name_to_idx
-                    .get(&name.to_lowercase())
-                    .copied()
-                    .filter(|&j| j as usize != node_idx && !joints.contains(&j));
+            for (name, resolved) in names.iter().zip(resolved_joints) {
+                let resolved = resolved.filter(|&j| j as usize != node_idx && !joints.contains(&j));
                 let joint = match resolved {
                     Some(joint) => joint,
                     None => {
@@ -751,23 +775,6 @@ impl GlbBuilder {
             }
         }
 
-        // Accumulate world transform by multiplying matrices up the chain
-        let identity = [
-            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
-        ];
-
-        fn mat4_mul(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
-            let mut r = [0.0f32; 16];
-            for i in 0..4 {
-                for j in 0..4 {
-                    for k in 0..4 {
-                        r[j * 4 + i] += a[k * 4 + i] * b[j * 4 + k];
-                    }
-                }
-            }
-            r
-        }
-
         // Collect chain from node to root (cap at node count to break cycles)
         let mut chain = vec![node_idx];
         let mut cur = node_idx;
@@ -781,13 +788,18 @@ impl GlbBuilder {
         }
 
         // Multiply from root down
-        let mut world = identity;
+        let mut world = glam::Mat4::IDENTITY;
         for &idx in chain.iter().rev() {
-            let local = nodes[idx].matrix.as_ref().map(|m| *m).unwrap_or(identity);
-            world = mat4_mul(&world, &local);
+            let node = &nodes[idx];
+            let local = node.matrix.as_ref().map(glam::Mat4::from_cols_array).unwrap_or_else(|| {
+                let scale = node.scale.map(glam::Vec3::from_array).unwrap_or(glam::Vec3::ONE);
+                let rotation = node.rotation.map(|q| glam::Quat::from_array(q.0)).unwrap_or(glam::Quat::IDENTITY);
+                let position = node.translation.map(glam::Vec3::from_array).unwrap_or(glam::Vec3::ZERO);
+                glam::Mat4::from_scale_rotation_translation(scale, rotation, position)
+            });
+            world *= local;
         }
-
-        world
+        world.to_cols_array()
     }
 
     /// Compute a node's world-space translation by walking up the parent chain.
@@ -828,6 +840,15 @@ impl GlbBuilder {
         let Some(attach) = scene_nodes.first().map(|n| n.value() as u32) else {
             return;
         };
+        self.attach_instance_bones(bones, attach, 0..self.nodes_json.len());
+    }
+
+    fn attach_instance_bones(
+        &mut self,
+        bones: &[crate::skeleton::Bone],
+        attach: u32,
+        existing: std::ops::Range<usize>,
+    ) {
         let quat = |q: [f32; 4]| glam::Quat::from_xyzw(q[1], q[2], q[3], q[0]); // stored [w, x, y, z]
         let matrix = |q: [f32; 4], t: [f32; 3]| glam::Mat4::from_rotation_translation(quat(q), glam::Vec3::from(t));
         let gltf_matrix = |m: glam::Mat4| {
@@ -842,33 +863,30 @@ impl GlbBuilder {
 
         // Bone index → the node we created for it (bones already registered by
         // name, e.g. as NMC nodes, are skipped and get none).
-        let mut created: Vec<Option<u32>> = vec![None; bones.len()];
+        let mut names = self.rig_names(existing);
+        let mut joints = vec![None; bones.len()];
+        let mut added = vec![false; bones.len()];
         for (index, bone) in bones.iter().enumerate() {
             if bone.name.is_empty() {
                 continue;
             }
-            let lower_name = bone.name.to_lowercase();
-            // Skip bones whose names are already registered (e.g. by an NMC
-            // node). Otherwise we would emit a duplicate node that shadows the
-            // NMC node when child entities resolve their ``parent_node_name``
-            // via ``node_name_to_idx``.
-            if self.node_name_to_idx.contains_key(&lower_name) {
+            let name = bone.name.to_lowercase();
+            if let Some(&node) = names.get(&name) {
+                joints[index] = Some(node);
                 continue;
             }
-            let node_idx = self.nodes_json.len() as u32;
+            let node = self.nodes_json.len() as u32;
             self.nodes_json.push(json::Node { name: Some(bone.name.clone()), ..Default::default() });
-            self.node_name_to_idx.insert(lower_name, node_idx);
-            self.bone_bind.insert(node_idx, (attach, matrix(bone.bind_world_rotation, bone.bind_world_position)));
-            created[index] = Some(node_idx);
+            names.insert(name.clone(), node);
+            self.node_name_to_idx.entry(name).or_insert(node);
+            self.bone_bind.insert(node, (attach, matrix(bone.bind_world_rotation, bone.bind_world_position)));
+            joints[index] = Some(node);
+            added[index] = true;
         }
-        // Joint hierarchy: a bone whose parent bone we created hangs under it
-        // with its local (possibly posed) transform; any other bone hangs
-        // under the attach node with its world transform.
-        for (index, bone) in bones.iter().enumerate() {
-            let Some(node_idx) = created[index] else { continue };
-            let parent_node = bone
-                .parent_index
-                .and_then(|p| created.get(p as usize).copied().flatten())
+        for (index, bone) in bones.iter().enumerate().filter(|(i, _)| added[*i]) {
+            let node_idx = joints[index].expect("added joint has a node");
+            let parent_node = bone.parent_index
+                .and_then(|p| joints.get(p as usize).copied().flatten())
                 .filter(|&p| p != node_idx);
             let (parent, local) = match parent_node {
                 Some(parent) => (parent, matrix(bone.local_rotation, bone.local_position)),
@@ -906,6 +924,18 @@ impl GlbBuilder {
             );
         }
         let has_mesh = !child.mesh.positions.is_empty();
+
+        let child_start = self.nodes_json.len();
+        // Find parent NMC node and attach. Fall back to parent entity node, then root.
+        let parent_idx = self
+            .node_name_to_idx
+            .get(&child.parent_node_name.to_lowercase())
+            .copied()
+            .or_else(|| {
+                self.node_name_to_idx
+                    .get(&child.parent_entity_name.to_lowercase())
+                    .copied()
+            });
 
         // Pack mesh data (skip for NMC-only entities with no geometry).
         let child_packed = if has_mesh {
@@ -976,33 +1006,7 @@ impl GlbBuilder {
                     );
                 }
 
-                let mut bone_node_indices: Vec<json::Index<json::Node>> = Vec::new();
-                if !super::hierarchy_covers_bones(Some(child_nmc), &child.bones) {
-                    // Create bone attachment nodes for this entity's skeleton.
-                    for bone in &child.bones {
-                        if bone.name.is_empty() {
-                            continue;
-                        }
-                        let lower = bone.name.to_lowercase();
-                        if self.node_name_to_idx.contains_key(&lower) {
-                            continue; // NMC node already registered this name
-                        }
-                        let bone_idx = self.nodes_json.len() as u32;
-                        let [qw, qx, qy, qz] = bone.world_rotation;
-                        let rot = glam::Quat::from_xyzw(qx, qy, qz, qw);
-                        let trans = glam::Vec3::from(bone.world_position);
-                        let m = glam::Mat4::from_rotation_translation(rot, trans);
-                        self.nodes_json.push(json::Node {
-                            name: Some(bone.name.clone()),
-                            matrix: Some(m.to_cols_array()),
-                            ..Default::default()
-                        });
-                        self.node_name_to_idx.insert(lower, bone_idx);
-                        bone_node_indices.push(json::Index::new(bone_idx));
-                    }
-                }
-
-                // Create a wrapper node for the child entity containing its NMC root nodes + bone nodes
+                // Create a wrapper node for the child entity containing its NMC root nodes
                 let wrapper_idx = self.nodes_json.len() as u32;
                 // Only register if the name isn't already taken (e.g., by a parent NMC node
                 // with the same name — vehicle XML wheel parts use bone names as entity names).
@@ -1010,11 +1014,10 @@ impl GlbBuilder {
                 if !self.node_name_to_idx.contains_key(&lower_name) {
                     self.node_name_to_idx.insert(lower_name, wrapper_idx);
                 }
-                let mut wrapper_children: Vec<json::Index<json::Node>> = child_root_nodes
+                let wrapper_children: Vec<json::Index<json::Node>> = child_root_nodes
                     .iter()
                     .map(|&i| json::Index::new(child_node_base + i))
                     .collect();
-                wrapper_children.extend(bone_node_indices);
                 let offset_matrix = resolved_local_matrix.or(offset_to_gltf_matrix(
                     child.offset_position,
                     child.offset_rotation,
@@ -1077,16 +1080,9 @@ impl GlbBuilder {
 
         let child_node_idx = child_root_idx;
 
-        // Find parent NMC node and attach. Fall back to parent entity node, then root.
-        let parent_idx = self
-            .node_name_to_idx
-            .get(&child.parent_node_name.to_lowercase())
-            .copied()
-            .or_else(|| {
-                self.node_name_to_idx
-                    .get(&child.parent_entity_name.to_lowercase())
-                    .copied()
-            });
+        if !super::hierarchy_covers_bones(child.nmc.as_ref(), &child.bones) {
+            self.attach_instance_bones(&child.bones, child_node_idx, child_start..child_node_idx as usize);
+        }
 
         if parent_idx.is_none() {
             log::warn!(
@@ -1150,12 +1146,12 @@ impl GlbBuilder {
     ) -> (Vec<json::Index<json::Node>>, Vec<crate::types::LightInfo>) {
         // Cache loaded meshes by CGF index (mesh data + materials from P4k).
         // Mesh loading is expensive; packing with different palettes is cheap.
-        let mut mesh_cache: Vec<Option<(crate::types::Mesh, Option<crate::mtl::MtlFile>)>> =
+        let mut mesh_cache =
             vec![None; interiors.unique_cgfs.len()];
 
         // Cache packed glTF mesh indices by (cgf_index, palette_key).
         // Same CGF + same palette = reuse. Different palette = separate mesh.
-        let mut packed_cache: HashMap<PackedInteriorMeshKey, u32> = HashMap::new();
+        let mut packed_cache: HashMap<PackedInteriorMeshKey, Option<PackedInteriorMesh>> = HashMap::new();
 
         let mut all_lights: Vec<crate::types::LightInfo> = Vec::new();
         let mut container_scene_nodes: Vec<json::Index<json::Node>> = Vec::new();
@@ -1186,17 +1182,13 @@ impl GlbBuilder {
                     cgf_index: mesh_array_idx,
                     palette_hash: palette_key,
                 };
-                let gltf_mesh_idx = if let Some(&idx) = packed_cache.get(&cache_key) {
-                    Some(idx)
-                } else {
-                    // Load mesh data (cached by CGF index).
+                if !packed_cache.contains_key(&cache_key) {
                     if mesh_cache[mesh_array_idx].is_none() {
                         mesh_cache[mesh_array_idx] =
-                            load_interior_mesh(&interiors.unique_cgfs[mesh_array_idx])
-                                .map(|(mesh, mtl, _nmc)| (mesh, mtl));
+                            load_interior_mesh(&interiors.unique_cgfs[mesh_array_idx]);
                     }
-                    let Some((ref mesh, ref mtl)) = mesh_cache[mesh_array_idx] else {
-                        packed_cache.insert(cache_key, u32::MAX);
+                    let Some((mesh, mtl, nmc)) = &mesh_cache[mesh_array_idx] else {
+                        packed_cache.insert(cache_key, None);
                         continue;
                     };
                     let textures = load_textures(mtl.as_ref(), effective_palette);
@@ -1209,19 +1201,39 @@ impl GlbBuilder {
                         material_mode,
                         false,
                     );
-                    packed_cache.insert(cache_key, packed.mesh_idx);
-                    Some(packed.mesh_idx)
-                };
+                    let packed = match nmc.as_ref().filter(|nmc| !nmc.nodes.is_empty()) {
+                        Some(nmc) if self.interior_animation_nodes.contains_key(&mesh_array_idx) => {
+                            PackedInteriorMesh::Rig(self.build_nmc_meshes(&packed, nmc, &mesh.submeshes, true))
+                        }
+                        _ => PackedInteriorMesh::Flat(packed.mesh_idx),
+                    };
+                    packed_cache.insert(cache_key, Some(packed));
+                }
 
-                let Some(gltf_mesh_idx) = gltf_mesh_idx.filter(|&i| i != u32::MAX) else {
-                    continue;
+                let node = match packed_cache[&cache_key].as_ref() {
+                    None => continue,
+                    Some(PackedInteriorMesh::Flat(mesh)) => json::Node {
+                        mesh: Some(json::Index::new(*mesh)),
+                        matrix: Some(flatten_4x4(transform)),
+                        ..Default::default()
+                    },
+                    Some(PackedInteriorMesh::Rig(meshes)) => {
+                        let (_, _, Some(nmc)) = mesh_cache[mesh_array_idx].as_ref().expect("rig mesh is loaded") else {
+                            unreachable!("rig mesh has an NMC");
+                        };
+                        let start = self.nodes_json.len();
+                        let roots = self.build_nmc_nodes(nmc, meshes, false);
+                        let end = self.nodes_json.len();
+                        self.interior_animation_nodes.entry(mesh_array_idx).or_default().push(start..end);
+                        json::Node {
+                            matrix: Some(flatten_4x4(transform)),
+                            children: Some(roots.into_iter().map(|i| json::Index::new(start as u32 + i)).collect()),
+                            ..Default::default()
+                        }
+                    }
                 };
                 let node_idx = self.nodes_json.len() as u32;
-                self.nodes_json.push(json::Node {
-                    mesh: Some(json::Index::new(gltf_mesh_idx)),
-                    matrix: Some(flatten_4x4(transform)),
-                    ..Default::default()
-                });
+                self.nodes_json.push(node);
                 container_children.push(json::Index::new(node_idx));
             }
 
@@ -1524,10 +1536,17 @@ impl GlbBuilder {
         submeshes: &[crate::types::SubMesh],
         has_mesh: bool,
     ) -> Vec<u32> {
-        // Remove the flat mesh — we'll replace with per-NMC-node meshes.
-        if has_mesh {
-            self.meshes_json.pop();
-        }
+        let meshes = self.build_nmc_meshes(packed, nmc, submeshes, has_mesh);
+        self.build_nmc_nodes(nmc, &meshes, true)
+    }
+
+    fn build_nmc_meshes(
+        &mut self,
+        packed: &PackedMeshInfo,
+        nmc: &NodeMeshCombo,
+        submeshes: &[crate::types::SubMesh],
+        has_mesh: bool,
+    ) -> Vec<Option<u32>> {
 
         // Group submeshes by NMC node.
         let mut node_submeshes: Vec<Vec<usize>> = vec![vec![]; nmc.nodes.len()];
@@ -1581,6 +1600,15 @@ impl GlbBuilder {
             }
         }
 
+        node_mesh_idx
+    }
+
+    fn build_nmc_nodes(
+        &mut self,
+        nmc: &NodeMeshCombo,
+        node_mesh_idx: &[Option<u32>],
+        register_names: bool,
+    ) -> Vec<u32> {
         // Compute parent-child relationships.
         let mut children_map: Vec<Vec<u32>> = vec![vec![]; nmc.nodes.len()];
         let mut root_nodes: Vec<u32> = vec![];
@@ -1606,7 +1634,7 @@ impl GlbBuilder {
                 Some(super::mat3x4_to_gltf(&nmc_node.bone_to_world))
             };
             let node_idx = self.nodes_json.len() as u32;
-            if !nmc_node.name.is_empty() {
+            if register_names && !nmc_node.name.is_empty() {
                 self.node_name_to_idx
                     .insert(nmc_node.name.to_lowercase(), node_idx);
             }
@@ -1635,6 +1663,29 @@ impl GlbBuilder {
         metadata: &super::GlbMetadata,
     ) -> Result<Vec<u8>, Error> {
         self.bind_skins();
+        // Flat packed meshes are shared during assembly. Remove the ones used only as sources
+        // for NMC primitives after all references to shared meshes are known.
+        let mut used = vec![false; self.meshes_json.len()];
+        for node in &self.nodes_json {
+            if let Some(mesh) = node.mesh {
+                used[mesh.value()] = true;
+            }
+        }
+        let mut remap = vec![0; used.len()];
+        let mut index = 0;
+        let mut next_id = 0;
+        self.meshes_json.retain(|_| {
+            let keep = used[index];
+            remap[index] = next_id;
+            next_id += u32::from(keep);
+            index += 1;
+            keep
+        });
+        for node in &mut self.nodes_json {
+            if let Some(mesh) = node.mesh {
+                node.mesh = Some(json::Index::new(remap[mesh.value()]));
+            }
+        }
 
         // Wrap all content under CryEngine Z-up → glTF Y-up rotation root.
         let coord_root_idx = self.nodes_json.len() as u32;

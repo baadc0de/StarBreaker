@@ -267,6 +267,7 @@ fn parse_ui_binding(v: &Value) -> Option<UiBinding> {
         content_canvas_record_name: opt_str("content_canvas_record_name"),
         screen_name_loc_key: opt_str("screen_name_loc_key"),
         transit_location_loc_key: opt_str("transit_location_loc_key"),
+        interaction_distance: obj.get("interaction_distance").and_then(|v| v.as_f64()).map(|v| v as f32),
         dashboard_view_index: opt_u32("dashboard_view_index"),
         dashboard_screen_slot: opt_u32("dashboard_screen_slot"),
         owner_source_file: opt_str("owner_source_file"),

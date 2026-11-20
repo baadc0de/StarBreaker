@@ -553,7 +553,14 @@ pub fn assemble_glb_with_loadout_with_progress(
     let glb_progress =
         progress.map(|progress| progress.sub(ASSEMBLY_STAGE_START, ASSEMBLY_STAGE_END));
     let phase_start = Instant::now();
-    let glb = crate::gltf::write_glb_with_progress(
+    let rig_animations = bundled_rig_animations(
+        p4k,
+        &animation_sources,
+        root_animation_controller.as_ref(),
+        &child_payloads,
+        &loaded_interiors,
+    );
+    let glb = crate::gltf::write_rig_glb_with_progress(
         crate::gltf::GlbInput {
             root_mesh: Some(root_mesh),
             root_materials: root_mtl,
@@ -565,6 +572,7 @@ pub fn assemble_glb_with_loadout_with_progress(
             interiors: loaded_interiors,
             animations: Vec::new(),
         },
+        rig_animations,
         &mut crate::gltf::GlbLoaders {
             load_textures: &mut tex_loader,
             load_interior_mesh: &mut interior_mesh_loader,
@@ -713,4 +721,45 @@ mod tests {
             material_indices: vec![],
         }
     }
+}
+
+
+/// Match decoded clips to the actual root, attachments and interior assets that the GLB will pack.
+fn bundled_rig_animations(
+    p4k: &MappedP4k,
+    sources: &[crate::animation::rig_sources::RigSource],
+    root_controller: Option<&crate::animation::AnimationControllerSource>,
+    children: &[crate::types::EntityPayload],
+    interiors: &super::LoadedInteriors,
+) -> Vec<crate::gltf::RigAnimation> {
+    use crate::gltf::{RigAnimation, RigTarget};
+    use super::animation_sources::geometry_key;
+
+    let mut animation = Vec::new();
+    let mut seen = HashSet::new();
+    for source in sources {
+        let key = geometry_key(&source.skeleton_path);
+        let targets: Vec<_> = if source.is_root {
+            vec![RigTarget::Root]
+        } else {
+            children.iter().enumerate().filter_map(|(index, child)| {
+                let path = child.skeleton_source_path.as_deref().unwrap_or(&child.geometry_path);
+                (geometry_key(path) == key).then_some(RigTarget::Child(index))
+            }).chain(interiors.unique_cgfs.iter().enumerate().filter_map(|(index, mesh)| {
+                (geometry_key(&mesh.cgf_path) == key).then_some(RigTarget::Interior(index))
+            })).collect()
+        };
+        let targets: Vec<_> = targets.into_iter()
+            .filter(|target| seen.insert((*target, key.clone())))
+            .collect();
+        if targets.is_empty() {
+            continue;
+        }
+        match crate::animation::extraction::extract_skeleton_gltf_clips(p4k, source, root_controller) {
+            Ok(clips) if !clips.is_empty() => animation.push(RigAnimation { targets, clips }),
+            Ok(_) => {}
+            Err(error) => log::warn!("[anim] rig '{}': {error}", source.skeleton_path),
+        }
+    }
+    animation
 }

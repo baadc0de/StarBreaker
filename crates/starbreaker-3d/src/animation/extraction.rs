@@ -1,7 +1,7 @@
 //! Shared full/sparse extraction of one rig's clips: its chrparams events paired with the
 //! tracks database (.dba) entries or loose CAF files their paths name. `load_tracks_database`
 //! and `loose_caf_clips` are the two sources every consumer of that pairing reads from.
-use super::matching::{ClipOrigin, caf_anchored_remap};
+use super::matching::{ClipOrigin, PairedClip, caf_anchored_remap};
 use super::serialise::{annotate_animation_json_source, database_to_animations_json};
 use super::{AnimationClip, AnimationDatabase, pose::bone_name_hash};
 use crate::error::Error;
@@ -26,6 +26,58 @@ pub(crate) fn extract_skeleton_json(
     include_unmatched_dba_blocks: bool,
     endpoints: bool,
 ) -> Result<Option<serde_json::Value>, Error> {
+    let Some(rig) = extract_skeleton_clips(p4k, skeleton_path, include_unmatched_dba_blocks, endpoints)? else {
+        return Ok(None);
+    };
+    let SkeletonClips { chrparams, chrparams_path, names, paired } = rig;
+    let dba_path = &chrparams.tracks_database;
+    // A per-bone blend-mode classifier (additive vs override) was tried here and deferred: no
+    // data-grounded discriminator is known. `BoneBlendMode`, `classify_bone_blend_modes` and
+    // `annotate_animations_json_with_blend_modes` remain for a future one.
+    // The CAF each clip plays: an event's resolved path, or a database-only entry's own name.
+    let caf_paths: Vec<String> = paired
+        .iter()
+        .map(|p| match p.origin {
+            ClipOrigin::DatabaseOnly => p.clip.name.clone(),
+            _ => chrparams.animations.get(&p.clip.name).cloned().unwrap_or_default(),
+        })
+        .collect();
+    let (clips, origins): (Vec<_>, Vec<_>) = paired
+        .into_iter()
+        .map(|paired| (paired.clip, paired.origin))
+        .unzip();
+    let mut value = database_to_animations_json(&AnimationDatabase { clips });
+    annotate_animation_json_source(&mut value, skeleton_path, &names);
+    attach_audio_events(p4k, &chrparams, &mut value, &caf_paths);
+    if endpoints {
+        for (clip, origin) in value.as_array_mut().into_iter().flatten().zip(origins) {
+            clip["catalogue_source"] = serde_json::json!(match origin {
+                ClipOrigin::DatabaseEvent => "Chrparams",
+                ClipOrigin::LooseCafEvent => "Caf",
+                ClipOrigin::DatabaseOnly => "DbaOnly",
+            });
+            clip["chrparams_path"] = serde_json::json!(chrparams_path);
+            if let (Some(dba_path), false) = (dba_path, origin == ClipOrigin::LooseCafEvent) {
+                clip["dba_path"] = serde_json::json!(dba_path);
+            }
+        }
+    }
+    Ok(Some(value))
+}
+
+struct SkeletonClips {
+    chrparams: crate::chrparams::ChrParams,
+    chrparams_path: String,
+    names: HashMap<u32, String>,
+    paired: Vec<PairedClip>,
+}
+
+fn extract_skeleton_clips(
+    p4k: &starbreaker_p4k::MappedP4k,
+    skeleton_path: &str,
+    include_unmatched_dba_blocks: bool,
+    endpoints: bool,
+) -> Result<Option<SkeletonClips>, Error> {
     let mut candidate_paths = Vec::new();
     if let Some(path) = swap_extension(skeleton_path, ".chrparams") {
         candidate_paths.push(path);
@@ -104,46 +156,60 @@ pub(crate) fn extract_skeleton_json(
         skeleton_bone_name_by_hash.len()
     );
 
-    let dba_path = chrparams.tracks_database.clone();
     let db = load_tracks_database(p4k, &chrparams, endpoints)?;
     let paired = caf_anchored_remap(&db, &chrparams, include_unmatched_dba_blocks, |caf_path| {
         loose_caf_clips(p4k, caf_path, endpoints)
     });
-    if paired.is_empty() && dba_path.is_none() {
+    if paired.is_empty() && chrparams.tracks_database.is_none() {
         return Ok(None);
     }
-    // A per-bone blend-mode classifier (additive vs override) was tried here and deferred: no
-    // data-grounded discriminator is known. `BoneBlendMode`, `classify_bone_blend_modes` and
-    // `annotate_animations_json_with_blend_modes` remain for a future one.
-    // The CAF each clip plays: an event's resolved path, or a database-only entry's own name.
-    let caf_paths: Vec<String> = paired
-        .iter()
-        .map(|p| match p.origin {
-            ClipOrigin::DatabaseOnly => p.clip.name.clone(),
-            _ => chrparams.animations.get(&p.clip.name).cloned().unwrap_or_default(),
-        })
-        .collect();
-    let (clips, origins): (Vec<_>, Vec<_>) = paired
-        .into_iter()
-        .map(|paired| (paired.clip, paired.origin))
-        .unzip();
-    let mut value = database_to_animations_json(&AnimationDatabase { clips });
-    annotate_animation_json_source(&mut value, skeleton_path, &skeleton_bone_name_by_hash);
-    attach_audio_events(p4k, &chrparams, &mut value, &caf_paths);
-    if endpoints {
-        for (clip, origin) in value.as_array_mut().into_iter().flatten().zip(origins) {
-            clip["catalogue_source"] = serde_json::json!(match origin {
-                ClipOrigin::DatabaseEvent => "Chrparams",
-                ClipOrigin::LooseCafEvent => "Caf",
-                ClipOrigin::DatabaseOnly => "DbaOnly",
-            });
-            clip["chrparams_path"] = serde_json::json!(chrparams_path);
-            if let (Some(dba_path), false) = (&dba_path, origin == ClipOrigin::LooseCafEvent) {
-                clip["dba_path"] = serde_json::json!(dba_path);
-            }
+    Ok(Some(SkeletonClips { chrparams, chrparams_path, names: skeleton_bone_name_by_hash, paired }))
+}
+
+/// Extract the same rig clips as the decomposed writer, keeping samples in their native basis.
+pub(crate) fn extract_skeleton_gltf_clips(
+    p4k: &starbreaker_p4k::MappedP4k,
+    source: &super::rig_sources::RigSource,
+    root_controller: Option<&super::AnimationControllerSource>,
+) -> Result<Vec<(crate::clip::Clip, serde_json::Value)>, Error> {
+    let Some(rig) = extract_skeleton_clips(p4k, &source.skeleton_path, source.is_root, false)? else {
+        return Ok(Vec::new());
+    };
+    let names: Vec<String> = rig.names.into_values().collect();
+    let mut clips: Vec<_> = rig.paired.into_iter().map(|paired| {
+        let source_kind = match paired.origin {
+            ClipOrigin::DatabaseEvent => "chrparams",
+            ClipOrigin::DatabaseOnly => "dba",
+            ClipOrigin::LooseCafEvent => "caf",
+        };
+        let metadata = serde_json::json!({
+            "name": paired.clip.name,
+            "fps": paired.clip.fps,
+            "frame_count": super::serialise::clip_frame_count(&paired.clip),
+            "source": source_kind,
+            "skeleton_path": source.skeleton_path,
+        });
+        (super::shared_clip(&paired.clip, &names), metadata)
+    }).collect();
+    let controller = if source.is_root { root_controller } else { source.controller.as_ref() };
+    if let Some(controller) = controller {
+        let mut values: Vec<_> = clips.iter_mut().map(|(_, value)| std::mem::take(value)).collect();
+        if let Err(error) = super::annotate_animation_fragments_json(p4k, &mut values, controller) {
+            log::warn!("[anim] controller {}: {error}", source.owner_entity);
+        }
+        for ((_, metadata), value) in clips.iter_mut().zip(values) {
+            *metadata = value;
         }
     }
-    Ok(Some(value))
+    for (clip, metadata) in &mut clips {
+        if !source.is_root {
+            let owner = source.owner_entity.rsplit(['/', '\\']).next().unwrap_or(&source.owner_entity);
+            let stem = owner.rsplit_once('.').map_or(owner, |(stem, _)| stem);
+            clip.name = format!("{stem}/{}", clip.name);
+        }
+        metadata.as_object_mut().expect("metadata is an object").remove("name");
+    }
+    Ok(clips)
 }
 
 /// Put each clip's audio events (`audio_events[]`, from the rig's `$AnimEventDatabase`, keyed by the clip's CAF) on

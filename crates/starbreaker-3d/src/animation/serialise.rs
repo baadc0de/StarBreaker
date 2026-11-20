@@ -65,21 +65,10 @@ pub fn clip_to_json(clip: &AnimationClip) -> serde_json::Value {
         }
     }
 
-    // Calculate frame count from both rotation and position keyframes
-    let mut max_frame = 0u32;
-    for channel in &clip.channels {
-        for keyframe in &channel.rotations {
-            max_frame = max_frame.max(keyframe.time.ceil() as u32);
-        }
-        for keyframe in &channel.positions {
-            max_frame = max_frame.max(keyframe.time.ceil() as u32);
-        }
-    }
-
     let mut value = serde_json::json!({
         "name": clip.name,
         "fps": clip.fps as u32,
-        "frame_count": max_frame,
+        "frame_count": clip_frame_count(clip),
         "bones": serde_json::Value::Object(bones),
     });
     // Phase 53: emit DBA-metadata `start_rotation` / `start_position` as
@@ -103,6 +92,21 @@ pub fn clip_to_json(clip: &AnimationClip) -> serde_json::Value {
         value["start_position"] = serde_json::json!([p[0], -p[2], p[1]]);
     }
     value
+}
+
+/// Last authored key as a frame index, rounded up for fractional frames.
+pub(crate) fn clip_frame_count(clip: &AnimationClip) -> u32 {
+    // Calculate frame count from both rotation and position keyframes
+    let mut max_frame = 0u32;
+    for channel in &clip.channels {
+        for keyframe in &channel.rotations {
+            max_frame = max_frame.max(keyframe.time.ceil() as u32);
+        }
+        for keyframe in &channel.positions {
+            max_frame = max_frame.max(keyframe.time.ceil() as u32);
+        }
+    }
+    max_frame
 }
 
 /// Convert a full database to a JSON array of animations.

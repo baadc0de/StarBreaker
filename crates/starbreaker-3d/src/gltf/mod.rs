@@ -177,6 +177,18 @@ pub fn write_glb_with_progress(
     opts: &GlbOptions,
     progress: Option<&Progress>,
 ) -> Result<Vec<u8>, Error> {
+    write_rig_glb_with_progress(input, Vec::new(), loaders, opts, progress)
+}
+
+pub(crate) use animation::{RigAnimation, RigTarget};
+
+pub(crate) fn write_rig_glb_with_progress(
+    input: GlbInput,
+    animations: Vec<RigAnimation>,
+    loaders: &mut GlbLoaders<'_>,
+    opts: &GlbOptions,
+    progress: Option<&Progress>,
+) -> Result<Vec<u8>, Error> {
     let mut builder = GlbBuilder::new();
     builder.preserve_material_slots = opts.preserve_material_slots;
     // The root's instance name; decomposed GLBs are shared assets and carry
@@ -240,9 +252,22 @@ pub fn write_glb_with_progress(
         builder.node_name_to_idx.entry(name.to_lowercase()).or_insert(root.value() as u32);
     }
 
+    let mut animation_nodes = std::collections::HashMap::new();
+    if !animations.is_empty() {
+        animation_nodes.insert(RigTarget::Root, vec![0..builder.nodes_json.len()]);
+        for rig in &animations {
+            for target in &rig.targets {
+                if let RigTarget::Interior(mesh) = target {
+                    builder.interior_animation_nodes.entry(*mesh).or_default();
+                }
+            }
+        }
+    }
+
     // ---- Attach child entities ----
     let num_children = input.children.len();
     for (i, child) in input.children.into_iter().enumerate() {
+        let start_node = builder.nodes_json.len();
         let _ = builder.attach_child_entity(
             child,
             &scene_nodes,
@@ -251,6 +276,9 @@ pub fn write_glb_with_progress(
             loaders.load_textures,
             None,
         );
+        if !animations.is_empty() {
+            animation_nodes.insert(RigTarget::Child(i), vec![start_node..builder.nodes_json.len()]);
+        }
         if num_children > 0 {
             let fraction = (i + 1) as f32 / num_children as f32;
             report_progress(progress, 0.20 + 0.40 * fraction, "Packing child meshes")?;
@@ -281,6 +309,16 @@ pub fn write_glb_with_progress(
         loaders.load_textures,
         loaders.load_interior_mesh,
     );
+    for (mesh, nodes) in std::mem::take(&mut builder.interior_animation_nodes) {
+        animation_nodes.insert(RigTarget::Interior(mesh), nodes);
+    }
+    builder.skin_scopes = animation_nodes.values().flatten().cloned().collect();
+    for animation in animations {
+        let ranges: Vec<_> = animation.targets.iter()
+            .filter_map(|target| animation_nodes.get(target))
+            .flatten().cloned().collect();
+        builder.add_rig_animations(animation.clips, &ranges)?;
+    }
     scene_nodes.extend(interior_scene_nodes);
     log::info!(
         "[mem-phase] interiors done, bin={}MB",

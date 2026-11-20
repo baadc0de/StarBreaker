@@ -206,7 +206,7 @@ fn controller_namespace(owner: &str, path: &str) -> String {
 
 // IncludedObjects can carry raw geometry only. Resolve its controller by an exact
 // DataCore geometry relationship; conflicting authored controllers remain unresolved.
-fn geometry_key(path: &str) -> String {
+pub(super) fn geometry_key(path: &str) -> String {
     path.replace('\\', "/")
         .to_ascii_lowercase()
         .trim_start_matches("data/")
