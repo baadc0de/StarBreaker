@@ -180,7 +180,15 @@ fn aggregate_closure<'j>(graph: &RecordGraph<'j>, start: &HashSet<&'j str>) -> H
     }
 }
 
-/// The light group's linkable interactions, each with the light state its transitions lead to.
+/// A state type's `DefaultState` (its pointer target among `states`), else its first state.
+fn default_state<'j>(state_type: &Value, states: &[&'j Value]) -> Option<&'j Value> {
+    let id = RecordGraph::pointer_id(state_type.get("DefaultState"));
+    id.and_then(|id| states.iter().find(|s| s.get("_Pointer_").and_then(Value::as_str) == Some(id)).copied())
+        .or_else(|| states.first().copied())
+}
+
+/// The light group's linkable interactions, each with the light state it leads to when fired with the group at rest
+/// (every state type in its default state).
 pub(crate) fn light_group_interactions(graph: &RecordGraph, tag: &dyn Fn(&Value) -> Option<String>) -> Vec<LightGroupInteraction> {
     let overrides: Vec<(&str, &str)> = graph
         .component("SLightGroupComponentParams")
@@ -202,15 +210,31 @@ pub(crate) fn light_group_interactions(graph: &RecordGraph, tag: &dyn Fn(&Value)
         .filter_map(|interaction| {
             let name = interaction.get("Name").and_then(Value::as_str).filter(|n| !n.is_empty())?;
             let own = interaction.get("_Pointer_").and_then(Value::as_str);
-            // The states its transitions set, from any state.
-            let next: HashSet<&str> = graph
-                .state_types()
-                .iter()
-                .flat_map(|t| t.get("States").and_then(Value::as_array).into_iter().flatten())
-                .flat_map(|s| s.get("Interactions").and_then(Value::as_array).into_iter().flatten())
-                .filter(|t| own.is_some() && RecordGraph::pointer_id(t.get("Interaction")) == own)
-                .filter_map(|t| RecordGraph::pointer_id(t.get("NextState")))
-                .collect();
+            // Fired with the group at rest: in each state type the interaction drives, the state its transition from
+            // the type's default state sets, or the default itself when none leaves it (transitions from the other,
+            // mutually exclusive states do not apply).
+            let fires = |t: &Value| own.is_some() && RecordGraph::pointer_id(t.get("Interaction")) == own;
+            let mut next: HashSet<&str> = HashSet::new();
+            for state_type in graph.state_types() {
+                let states: Vec<&Value> = state_type.get("States").and_then(Value::as_array).into_iter().flatten().collect();
+                let drives = states
+                    .iter()
+                    .any(|s| s.get("Interactions").and_then(Value::as_array).into_iter().flatten().any(fires));
+                let Some(default) = default_state(state_type, &states) else { continue };
+                if !drives {
+                    continue;
+                }
+                let from_default = default
+                    .get("Interactions")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .find(|t| fires(t))
+                    .and_then(|t| RecordGraph::pointer_id(t.get("NextState")));
+                if let Some(state) = from_default.or_else(|| default.get("_Pointer_").and_then(Value::as_str)) {
+                    next.insert(state);
+                }
+            }
             let reached = aggregate_closure(graph, &next);
             let states: Vec<&str> =
                 overrides.iter().filter(|(state, _)| reached.contains(state)).map(|(_, light)| *light).collect();
@@ -226,29 +250,46 @@ pub(crate) fn light_group_interactions(graph: &RecordGraph, tag: &dyn Fn(&Value)
         .collect()
 }
 
-/// A state type's interaction transitions (distinct `Interaction` → `NextState` pairs, authored order) and its linked
-/// state rules (`SLinkedInteractionStateChangedStateModifier.onChangeStateTagStates[]`, one per tag).
+/// A state type's interaction transitions and its linked state rules
+/// (`SLinkedInteractionStateChangedStateModifier.onChangeStateTagStates[]`, one per tag). A transition (`Interaction` →
+/// `NextState`) authored from every state of the type other than its target is listed once with `from: None` (from
+/// the target it changes nothing); any other is listed per source state. Authored order of first appearance.
 pub(crate) fn state_type_rules(
     graph: &RecordGraph,
     state_type: &Value,
     tag: &dyn Fn(&Value) -> Option<String>,
 ) -> (Vec<UiStateTransition>, Vec<UiLinkedState>) {
-    let mut transitions: Vec<UiStateTransition> = Vec::new();
-    for transition in state_type
-        .get("States")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .flat_map(|s| s.get("Interactions").and_then(Value::as_array).into_iter().flatten())
-    {
-        let (Some(interaction), Some(state)) =
-            (graph.interaction_name(transition.get("Interaction")), graph.state_name(transition.get("NextState")))
-        else {
-            continue;
-        };
-        let pair = UiStateTransition { interaction, state };
-        if !transitions.contains(&pair) {
-            transitions.push(pair);
+    let states: Vec<&Value> = state_type.get("States").and_then(Value::as_array).into_iter().flatten().collect();
+    let names: Vec<Option<String>> = states.iter().map(|s| s.get("StateName").and_then(Value::as_str).map(str::to_string)).collect();
+    // (interaction, next state) → the source states that author it, in first-appearance order.
+    let mut pairs: Vec<((String, String), Vec<String>)> = Vec::new();
+    for (state, from) in states.iter().zip(&names) {
+        let Some(from) = from else { continue };
+        for transition in state.get("Interactions").and_then(Value::as_array).into_iter().flatten() {
+            let (Some(interaction), Some(next)) =
+                (graph.interaction_name(transition.get("Interaction")), graph.state_name(transition.get("NextState")))
+            else {
+                continue;
+            };
+            let key = (interaction, next);
+            match pairs.iter_mut().find(|(k, _)| *k == key) {
+                Some((_, sources)) if !sources.contains(from) => sources.push(from.clone()),
+                Some(_) => {}
+                None => pairs.push((key, vec![from.clone()])),
+            }
+        }
+    }
+    let mut transitions = Vec::new();
+    for ((interaction, state), sources) in pairs {
+        let from_anywhere = names.iter().flatten().all(|name| *name == state || sources.contains(name));
+        if from_anywhere {
+            transitions.push(UiStateTransition { from: None, interaction, state });
+        } else {
+            transitions.extend(sources.into_iter().map(|from| UiStateTransition {
+                from: Some(from),
+                interaction: interaction.clone(),
+                state: state.clone(),
+            }));
         }
     }
     let mut linked = Vec::new();
@@ -331,10 +372,63 @@ mod tests {
         let graph = RecordGraph::new(&json);
         let types = graph.state_types();
         let (transitions, linked) = state_type_rules(&graph, &types[0], &tag);
-        assert_eq!(transitions, [UiStateTransition { interaction: "Go".into(), state: "Go".into() }], "deduplicated");
+        assert_eq!(transitions, [UiStateTransition { from: None, interaction: "Go".into(), state: "Go".into() }], "deduplicated");
         assert!(linked.is_empty());
         let (transitions, linked) = state_type_rules(&graph, &types[1], &tag);
         assert!(transitions.is_empty());
         assert_eq!(linked, [UiLinkedState { tag: "/T/cc".into(), state: "Off".into() }]);
+    }
+
+    /// Review fix: a transition keeps its source state unless it is authored from every other state of its type (from
+    /// its own target it changes nothing). Synthetic: `x` and `y` apply from anywhere, `z` only from `B`.
+    #[test]
+    fn transitions_keep_their_source_state() {
+        let json = json!({"_RecordValue_": {"Components": [
+            {"_Type_": "SEntityInteractableParams", "Interactable": {"SharedInteractions": [
+                {"_Pointer_": "ptr:1", "Name": "x"}, {"_Pointer_": "ptr:2", "Name": "y"}, {"_Pointer_": "ptr:3", "Name": "z"}
+            ]}},
+            {"_Type_": "SInteractionStateMachineParams", "StateTypes": [{"StateTypeName": "Sw", "States": [
+                {"_Pointer_": "ptr:10", "StateName": "A", "Interactions": [
+                    {"Interaction": "_PointsTo_:ptr:1", "NextState": "_PointsTo_:ptr:11"},
+                    {"Interaction": "_PointsTo_:ptr:2", "NextState": "_PointsTo_:ptr:12"}]},
+                {"_Pointer_": "ptr:11", "StateName": "B", "Interactions": [
+                    {"Interaction": "_PointsTo_:ptr:2", "NextState": "_PointsTo_:ptr:12"},
+                    {"Interaction": "_PointsTo_:ptr:3", "NextState": "_PointsTo_:ptr:10"}]},
+                {"_Pointer_": "ptr:12", "StateName": "C", "Interactions": [
+                    {"Interaction": "_PointsTo_:ptr:1", "NextState": "_PointsTo_:ptr:11"}]}
+            ]}]}
+        ]}});
+        let graph = RecordGraph::new(&json);
+        let (transitions, _) = state_type_rules(&graph, &graph.state_types()[0], &tag);
+        let t = |from: Option<&str>, i: &str, s: &str| UiStateTransition { from: from.map(str::to_string), interaction: i.into(), state: s.into() };
+        assert_eq!(transitions, [t(None, "x", "B"), t(None, "y", "C"), t(Some("B"), "z", "A")]);
+    }
+
+    /// Review fix: a light group's interaction is evaluated from its default state: a transition from a mutually
+    /// exclusive other state does not join in. Synthetic: `Go` from the default `Idle` leads to `Lit`; from `Other`
+    /// it would lead to `Dark` (listed first among the overrides).
+    #[test]
+    fn a_light_group_interaction_is_evaluated_from_the_default_state() {
+        let json = json!({"_RecordValue_": {"Components": [
+            {"_Type_": "SEntityInteractableParams", "Interactable": {"SharedInteractions": [
+                {"_Pointer_": "ptr:1", "Name": "Go", "Linkable": true},
+                {"_Pointer_": "ptr:2", "Name": "Stay", "Linkable": true}
+            ]}},
+            {"_Type_": "SInteractionStateMachineParams", "StateTypes": [{"StateTypeName": "Ia", "DefaultState": "_PointsTo_:ptr:10", "States": [
+                {"_Pointer_": "ptr:13", "StateName": "Other", "Interactions": [{"Interaction": "_PointsTo_:ptr:1", "NextState": "_PointsTo_:ptr:12"}]},
+                {"_Pointer_": "ptr:10", "StateName": "Idle", "Interactions": [{"Interaction": "_PointsTo_:ptr:1", "NextState": "_PointsTo_:ptr:11"}]},
+                {"_Pointer_": "ptr:11", "StateName": "On"},
+                {"_Pointer_": "ptr:12", "StateName": "Off", "Interactions": [{"Interaction": "_PointsTo_:ptr:2", "NextState": "_PointsTo_:ptr:11"}]}
+            ]}]},
+            {"_Type_": "SLightGroupComponentParams", "lightStateOverrides": [
+                {"interactionState": "_PointsTo_:ptr:12", "lightState": "Dark"},
+                {"interactionState": "_PointsTo_:ptr:11", "lightState": "Lit"},
+                {"interactionState": "_PointsTo_:ptr:10", "lightState": "Rest"}
+            ]}
+        ]}});
+        let graph = RecordGraph::new(&json);
+        let interactions = light_group_interactions(&graph, &tag);
+        assert_eq!(interactions[0].light_state.as_deref(), Some("Lit"));
+        assert_eq!(interactions[1].light_state.as_deref(), Some("Rest"), "no transition from the default: it stays there");
     }
 }

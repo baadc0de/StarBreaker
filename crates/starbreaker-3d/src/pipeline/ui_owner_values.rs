@@ -300,6 +300,7 @@ mod tests {
             transitions,
             [("LightsOn", "LightSwitchOn"), ("LightsOff", "LightSwitchOff"), ("LightsLow", "LightSwitchLow"), ("LightsAlarm", "LightSwitchAlarm")]
         );
+        assert!(switch.transitions.iter().all(|t| t.from.is_none()), "each switch interaction applies from any state");
         assert!(switch.linked.iter().any(|l| l.tag == "/State/LightSwitch/Emergency" && l.state == "LightSwitchAlarm"));
         let light = ty("LightState");
         assert!(light.transitions.is_empty());

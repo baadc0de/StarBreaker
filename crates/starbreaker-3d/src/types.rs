@@ -939,6 +939,10 @@ pub struct UiStateType {
 /// One interaction → state transition of a state type.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct UiStateTransition {
+    /// The state it is authored from; `None` when it is authored from every state of the type other than its target
+    /// (from the target it changes nothing).
+    #[serde(default)]
+    pub from: Option<String>,
     /// The owner's shared interaction `Name` (`LightsAlarm`).
     pub interaction: String,
     /// The state it sets (`LightSwitchAlarm`).
