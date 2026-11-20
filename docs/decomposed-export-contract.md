@@ -1648,25 +1648,30 @@ Recognised by DataCore component type (`AudioTriggerSpotParams`, `AudioAreaAmbie
       "id": <HIRC id>, "kind": "sound | random | sequence | blend | switch | mixer", "children": [<node>],
       // own properties (Wwise adds them down the tree): volume_db, pitch_cents, lpf, hpf (0..100), make_up_gain_db,
       // game_aux_send_db, output_bus_volume_db, initial_delay_s, random: [[prop, min, max]], rtpc: [<curve>]
-      // inherited by override (nearest node up the chain): bus, spatial, attenuation, use_game_aux, user_aux
+      // inherited by override (nearest node up the chain): bus, use_game_aux, user_aux; spatial (panned: listener-
+      // relative routing and a spatialisation mode other than none) and attenuation (that same positioning override's
+      // AttenuationID when its attenuation switch is on) come from one positioning override
       // sound:    media, source_plugin, loop_count (0 = forever), language_specific
-      // random:   weights, avoid_repeat, shuffle, continuous, loop_count, reset_each_play, transition, transition_s
+      // random:   weights, avoid_repeat, shuffle, continuous, loop_count, reset_each_play, transition, transition_s,
+      //           transition_random_s, global (one history for all game objects; else one per object)
       // sequence: restart_backward, continuous, loop_count, transition ...
-      // blend:    layers: [ { rtpc, children: [[child index, curve points]] } ]
+      // blend:    layers: [ { rtpc, children: [[child index, curve points]] } ] (x the RTPC value, y linear gain 0..1)
       // switch:   group_type, group_id, default_switch (children = the default branch)
   } ],
   "attenuations": { "<id>": { "max_distance", "cone", "volume_dry", "volume_aux_game", "volume_aux_user", "lpf",
                               "hpf", "spread", "focus" } },          // each { scaling, points: [[x, y, interp]] }
   "buses": { "<id>": { "name", "parent", "aux", "voice_volume_db", "bus_volume_db", "make_up_gain_db", "rtpc",
                        "rtpc_default_db", "rtpc_without_default", "state_groups",
-                       "effects": [ { "slot", "id", "plugin", "kind", "convolution", "ir_media", "gain_db", "eq", "limiter" } ] } },
+                       "effects": [ { "slot", "id", "plugin", "kind", "bypass", "convolution", "ir_media", "gain_db", "eq",
+                                      "limiter" } ] } },
   "media": { "<id>": { "file": "Audio/<id>.ogg", "codec", "channels", "rate", "seconds", "source", "error" } },
   "rtpcs": { "<ATL RTPC>": { "wwise_name", "min", "max", "default", "wwise_default" } },   // ATL / Init.bnk STMG defaults
   "environments": { "<ATL environment>": { "aux_bus", "record", "size": [min, max], "interiority": [min, max],
       "impulse_response": { "media", "file": "Audio/ir/<id>.f32", "channels", "rate", "frames", "peak_db",
                             "header_peak_db", "t20_s", "t30_s", "onset_s" } } },
   "environment_records": [ { "environment", "record", "size", "interiority" } ],
-  "rooms": { "<room GUID>": { "name", "class", "volume_m3", "size_m", "interiority", "environment", "rule" } },
+  "rooms": { "<room GUID>": { "name", "class", "volume_m3", "size_m", "interiority", "environment",
+      "selection": "explicit | inferred_in_range | inferred_nearest_range | none", "candidates": [<environment>], "rule" } },
   "entity_classes": { "<class GUID>": { "name",
       "effects": [ { "on": "trigger | tag", "tag", "tag_path", "label", "trigger", "bone", "offset", "multi_position" } ],
       "actions": [ { "path", "trigger" } ] } },
@@ -1679,7 +1684,10 @@ Rules a player follows (all values are the game's; nothing is chosen per asset):
 - **Trees.** A Play action plays its `root` after `delay_s`. Random containers pick by `weights`, avoiding the last
   `avoid_repeat` picks; sequences play in order. `continuous` containers chain their items (`transition`,
   `transition_s`) and loop `loop_count` times (0 forever); step containers play one item per play. Blends play every
-  child; switches their default branch. A sound plays `loop_count` times (0 forever).
+  child at the gain its layers' curves give at the RTPC values (several layers multiply); switches their default
+  branch. A sound plays `loop_count` times (0 forever). A `global` container keeps one sequence / avoid-repeat history;
+  otherwise each emitter keeps its own. `initial_delay_s` delays the node's start. Curve interpolation between two
+  points follows the left point's shape (`mix::evaluate`: Wwise's `AkInterpolation` forms) in the stored units.
 - **Gains.** A voice's volume is the action `context` plus every node's own `volume_db` / `make_up_gain_db` /
   `output_bus_volume_db` from the root to the leaf, plus each node's `random` draw, plus its `rtpc` curves at the voice's
   RTPC values (ATL `default` unless the player drives the RTPC: a spot's `Volume` and `Pitch`, an area's and its spots'
@@ -1694,13 +1702,14 @@ Rules a player follows (all values are the game's; nothing is chosen per asset):
   spectra; `starbreaker_wwise::convolution` documents the layout).
 - **Limiter.** A bus's Wwise Peak Limiter (`buses[].effects[].limiter`: `threshold_db`, `ratio`, `look_ahead_s`,
   `release_s`, `output_level_db`, `process_lfe`, `channel_link`; the master bus carries one) limits that bus's mix.
+  An effect with `bypass` is not applied.
 - **Rooms.** `rooms[].environment` is the room class's `AudioPropagationParams.audioEnvironment` when set; else the
   `AudioEnvironment` record whose `interiority` range holds the class's `physicalEncapsulationValue` and whose `size`
   range holds `size_m` = cube root of the room's volume (the nearest range when between ranges). The size metric is
-  the exporter's reading of the records' ranges (metres); the engine's own metric is not in the data.
+  the exporter's reading of the records' ranges (metres); the engine's own metric is not in the data, so `selection`
+  says which rooms are inferred (and `candidates` lists the records their encapsulation allows).
 
-Open items (not derivable from the data; not applied): the shapes of the non-linear curve interpolations
-(`mix::evaluate` documents the forms used), the mapping of Wwise LPF/HPF amounts (0..100) to cut-off frequencies,
+Open items (not derivable from the data; not applied): the engine's room-size metric (above), the mapping of Wwise LPF/HPF amounts (0..100) to cut-off frequencies,
 spread and focus, bus EQ / compressor / meter effects, ducking, state groups (the game sets states at run
 time), LFO modulators, switch values other than the default, and the two zero words at offset 40 of an
 impulse-response header.

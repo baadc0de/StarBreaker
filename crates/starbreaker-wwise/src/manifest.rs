@@ -271,8 +271,28 @@ fn convert_media(lib: &AudioLibrary<'_>, id: u32, home: &str, language_specific:
     }
 }
 
-/// The granule position of an Ogg stream's last page (its sample count for Vorbis).
+/// The granule position of an Ogg stream's last complete page (its sample count for Vorbis), walking the pages from
+/// the start (header: capture pattern, version, type, granule at 6, serial, sequence, CRC, segment count at 26, the
+/// lacing table, then the body). Pages without a granule (-1) are skipped.
 fn last_granule(ogg: &[u8]) -> Option<u64> {
-    let at = ogg.windows(4).rposition(|w| w == b"OggS")?;
-    ogg.get(at + 6..at + 14).map(|b| u64::from_le_bytes(b.try_into().unwrap()))
+    let mut at = 0;
+    let mut last = None;
+    while ogg.get(at..at + 4) == Some(b"OggS") {
+        let Some(&segments) = ogg.get(at + 26) else { break };
+        let Some(lacing) = ogg.get(at + 27..at + 27 + usize::from(segments)) else { break };
+        let end = at + 27 + lacing.len() + lacing.iter().map(|&l| usize::from(l)).sum::<usize>();
+        if end > ogg.len() {
+            break;
+        }
+        let granule = u64::from_le_bytes(ogg[at + 6..at + 14].try_into().unwrap());
+        if granule != u64::MAX {
+            last = Some(granule);
+        }
+        at = end;
+    }
+    last
 }
+
+#[cfg(test)]
+#[path = "manifest_tests.rs"]
+mod tests;

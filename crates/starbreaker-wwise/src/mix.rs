@@ -5,8 +5,7 @@
 //!   RTPCs' ATL defaults) and effect slots (a Convolution Reverb slot carries its parameters and IR media id; Gain, Parametric EQ and
 //!   Peak Limiter slots their parameters).
 //! - [`AttenuationOut`]: the curves of an attenuation object by slot.
-//! - [`evaluate`]: a Wwise curve at `x` (linear and constant interpolation exactly; the other named shapes by their
-//!   documented forms, see the function).
+//! - [`evaluate`]: a Wwise curve at `x`, every `AkCurveInterpolation` shape (see the function).
 
 use serde::Serialize;
 
@@ -74,6 +73,9 @@ pub struct EffectOut {
     /// The plugin id in hex (`0x007f0003` Convolution Reverb, `0x00760003` RoomVerb, …).
     pub plugin: String,
     pub kind: &'static str,
+    /// The slot is bypassed (the bus's bypass-all byte, or bit 0 of the slot's bit vector): not applied.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub bypass: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub convolution: Option<ConvolutionParams>,
     /// The impulse-response media of a Convolution Reverb.
@@ -243,6 +245,7 @@ pub fn bus_chain(resolver: &Resolver<'_, '_>, bus: u32) -> Vec<(u32, BusOut)> {
                     id: fx.fx_id,
                     plugin: String::new(),
                     kind: "missing",
+                    bypass: object.fx_params.bypass_all || fx.bits & 0x01 != 0,
                     convolution: None,
                     ir_media: None,
                     gain_db: None,
@@ -308,10 +311,12 @@ pub fn to_db(scaling: u8, y: f32) -> f32 {
 }
 
 /// A Wwise curve at `x` (clamped to its first and last points). Interpolation between two points follows the left
-/// point's shape (`AkCurveInterpolation`): linear (4) and constant (9, holds the left value) are exact. The other
-/// shapes use their named forms on the normalised segment t ∈ [0, 1]: log3 1−(1−t)³, log1 1−(1−t)^1.41, exp1 t^1.41,
-/// exp3 t³, sine sin(πt/2), sine-recip 1−cos(πt/2), S-curve and inverse S-curve the cubic smoothstep and its inverse.
-/// These shape formulas are the named curves, not code read from the engine (open item in the contract).
+/// point's shape (`AkCurveInterpolation`) on the normalised segment t ∈ [0, 1], in the curve's stored units (a dB-scaled
+/// curve converts after interpolating): linear (4) t, constant (9) holds the left value, log3 (0) 1−(1−t)³, sine (1)
+/// sin(πt/2), log1 (2) t(3−t)/2, inverse S-curve (3) sin(πt)/2 below t = ½ and 1−sin(πt)/2 above, S-curve (5)
+/// (1−cos πt)/2, exp1 (6) (t+1)t/2, sine reciprocal (7) 1−cos(πt/2), exp3 (8) t³. These are the closed forms of
+/// Wwise's `AkInterpolation` (its polynomial approximations of the trigonometric shapes agree to ~1e-5) as wwiser's
+/// renderer reproduces it (`generator/render/bnode_rtpc.py`).
 pub fn evaluate(points: &[(f32, f32, u32)], x: f32) -> f32 {
     let (Some(first), Some(last)) = (points.first(), points.last()) else { return 0.0 };
     if x <= first.0 {
@@ -323,16 +328,18 @@ pub fn evaluate(points: &[(f32, f32, u32)], x: f32) -> f32 {
     let i = points.windows(2).position(|w| x >= w[0].0 && x < w[1].0).unwrap_or(0);
     let (a, b) = (points[i], points[i + 1]);
     let t = if b.0 > a.0 { (x - a.0) / (b.0 - a.0) } else { 0.0 };
+    use std::f32::consts::{FRAC_PI_2, PI};
     let shaped = match a.2 {
         9 => 0.0,
         0 => 1.0 - (1.0 - t).powi(3),
-        2 => 1.0 - (1.0 - t).powf(1.41),
-        6 => t.powf(1.41),
-        8 => t.powi(3),
-        1 => (t * std::f32::consts::FRAC_PI_2).sin(),
-        7 => 1.0 - (t * std::f32::consts::FRAC_PI_2).cos(),
-        5 => t * t * (3.0 - 2.0 * t),
-        3 => 0.5 - (((1.0 - 2.0 * t).asin()) / 3.0).sin(),
+        1 => (t * FRAC_PI_2).sin(),
+        2 => t * (3.0 - t) * 0.5,
+        3 if t > 0.5 => 1.0 - (t * PI).sin() * 0.5,
+        3 => (t * PI).sin() * 0.5,
+        5 => (1.0 - (t * PI).cos()) * 0.5,
+        6 => (t + 1.0) * t * 0.5,
+        7 => 1.0 - (t * FRAC_PI_2).cos(),
+        8 => t * t * t,
         _ => t,
     };
     a.1 + (b.1 - a.1) * shaped

@@ -60,6 +60,7 @@ fn a_random_container_stays_a_container_with_its_rules() {
     let NodeKind::Random { weights, avoid_repeat, play, .. } = &root.kind else { panic!("{root:?}") };
     assert_eq!((weights.as_slice(), *avoid_repeat), (&[50.0, 25.0][..], 2));
     assert!(play.continuous);
+    assert!(!play.global, "flags 0x08: continuous, per game object");
     assert_eq!((play.loop_count, play.transition, play.transition_s), (0, "crossfade_amp", 1.0));
     assert_eq!(root.children.len(), 2, "both variations, not a union of leaves");
     let leaf = &r.out.nodes[root.children[0]];
@@ -126,4 +127,54 @@ fn a_blend_container_keeps_every_child_and_a_sequence_its_order() {
     assert!(matches!(seq.kind, NodeKind::Sequence { .. }));
     let order: Vec<u32> = seq.children.iter().map(|&c| r.out.nodes[c].id).collect();
     assert_eq!(order, vec![43, 44]);
+}
+
+#[test]
+fn attenuation_and_panning_come_from_the_positioning_override() {
+    // Mixer 50 overrides positioning (3D, attenuation 77); sound 51 under it stores attenuation 88 without overriding
+    // positioning (inactive); mixer 52 overrides positioning with spatialisation "none" but attenuation on (55).
+    let objects = vec![
+        mixer(50, &Base { props: vec![(prop_id::ATTENUATION_ID, 77)], positioning: Some(true), ..Base::default() }, &[51]),
+        sound(51, 510, 0x0001_0001, &Base { parent: 50, props: vec![(prop_id::ATTENUATION_ID, 88)], ..Base::default() }),
+        mixer(52, &Base { props: vec![(prop_id::ATTENUATION_ID, 55)], positioning: Some(true), bits3d: Some(0x08), ..Base::default() }, &[53]),
+        sound(53, 530, 0x0001_0001, &Base { parent: 52, ..Base::default() }),
+        mixer(54, &Base { positioning: Some(true), ..Base::default() }, &[55]),
+        sound(55, 550, 0x0001_0001, &Base { parent: 54, props: vec![(prop_id::ATTENUATION_ID, 66)], ..Base::default() }),
+        event("Play_A", &[1200]),
+        action(1200, 0x0403, 51, None),
+        event("Play_B", &[1201]),
+        action(1201, 0x0403, 53, None),
+        event("Play_C", &[1202]),
+        action(1202, 0x0403, 55, None),
+    ];
+    let media = vec![(510, b"a".to_vec()), (530, b"b".to_vec()), (550, b"c".to_vec())];
+    let lib = library(atl(&[("Play_A", BANK, "OneShot"), ("Play_B", BANK, "OneShot"), ("Play_C", BANK, "OneShot")], &[]), vec![(BANK, objects, media)]);
+    let mut r = Resolver::new(&lib);
+    let a = r.trigger("Play_A").play[0].root;
+    assert_eq!(r.out.nodes[a].effective.attenuation, Some(77), "the override's attenuation, not an inactive one below it");
+    assert!(r.out.nodes[a].effective.spatial);
+    let b = r.trigger("Play_B").play[0].root;
+    assert!(!r.out.nodes[b].effective.spatial, "spatialisation none: not panned");
+    assert_eq!(r.out.nodes[b].effective.attenuation, Some(55), "attenuation still on");
+    let c = r.trigger("Play_C").play[0].root;
+    assert_eq!(r.out.nodes[c].effective.attenuation, None, "an override without an attenuation has none");
+}
+
+#[test]
+fn an_unresolvable_child_takes_its_weight_with_it() {
+    let objects = vec![
+        ranseq(60, &Base::default(), 0, 0, 1, 0, &[(61, 10_000), (99_999, 20_000), (62, 30_000)]),
+        sound(61, 610, 0x0001_0001, &Base { parent: 60, ..Base::default() }),
+        sound(62, 620, 0x0001_0001, &Base { parent: 60, ..Base::default() }),
+        event("Play_W", &[1300]),
+        action(1300, 0x0403, 60, None),
+    ];
+    let media = vec![(610, b"a".to_vec()), (620, b"b".to_vec())];
+    let lib = library(atl(&[("Play_W", BANK, "OneShot")], &[]), vec![(BANK, objects, media)]);
+    let mut r = Resolver::new(&lib);
+    let w = r.trigger("Play_W").play[0].root;
+    let root = &r.out.nodes[w];
+    let NodeKind::Random { weights, .. } = &root.kind else { panic!() };
+    assert_eq!(root.children.len(), 2);
+    assert_eq!(weights.as_slice(), &[10.0, 30.0][..]);
 }

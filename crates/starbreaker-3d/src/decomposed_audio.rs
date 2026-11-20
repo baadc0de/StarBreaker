@@ -8,6 +8,8 @@
 //!   places (interior placements, entities and lifts, the root entity and child items) — and
 //!   the rooms' audio environments, then write `Packages/<name>/audio.json` and the media and impulse responses under
 //!   `Audio/` (shared between packages, like `Data/`). See `docs/decomposed-export-contract.md` §Audio.
+//! - [`refresh_package_audio`]: the same over a finished export whose scene gained children afterwards (the player
+//!   export's rigid items).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::str::FromStr;
@@ -194,6 +196,28 @@ pub(crate) fn choose_environment<'a>(
         .map(|(name, _)| name.as_str())
 }
 
+/// Rebuild a finished export's package audio after its scene changed (the player export attaches its rigid items to
+/// the scene after the character package was written): runs [`add_package_audio`] over the scene and clip sidecars,
+/// replaces `audio.json` and adds the media it newly references.
+pub(crate) fn refresh_package_audio(db: &Database<'_>, p4k: &MappedP4k, files: &mut Vec<crate::ExportedFile>, package_name: &str) {
+    let prefix = format!("Packages/{package_name}/");
+    let mut scratch = crate::decomposed::OutputFiles::new();
+    for f in files.iter() {
+        if f.relative_path.starts_with(&prefix) && f.relative_path.ends_with(".json") && !f.relative_path.ends_with("/audio.json") {
+            scratch.insert_canonical(f.relative_path.clone(), f.bytes.clone());
+        }
+    }
+    add_package_audio(db, p4k, &mut scratch, package_name);
+    let audio_json = format!("{prefix}audio.json");
+    files.retain(|f| f.relative_path != audio_json);
+    let present: std::collections::HashSet<String> = files.iter().map(|f| f.relative_path.clone()).collect();
+    for (path, bytes) in scratch.into_files() {
+        if path == audio_json || (path.starts_with(&format!("{AUDIO_DIR}/")) && !present.contains(&path)) {
+            files.push(crate::ExportedFile { kind: crate::decomposed::classify_exported_file_kind(&path), relative_path: path, bytes });
+        }
+    }
+}
+
 /// Collect the package's triggers and rooms, build `audio.json` and add it and its media to `files`.
 pub(crate) fn add_package_audio(db: &Database<'_>, p4k: &MappedP4k, files: &mut crate::decomposed::OutputFiles, package_name: &str) {
     let scene_path = format!("Packages/{package_name}/scene.json");
@@ -321,6 +345,19 @@ pub(crate) fn add_package_audio(db: &Database<'_>, p4k: &MappedP4k, files: &mut 
         if let Some(env) = &chosen {
             used_envs.insert(env.clone());
         }
+        // How the environment was found: authored on the room class, or inferred (the size metric is the exporter's
+        // reading; "nearest_range" when the size falls between two records' ranges). Candidates: every record whose
+        // interiority range holds the room's encapsulation, so a reader can see the alternatives.
+        let in_range = |n: &str| environments.iter().any(|(e, r)| e == n && size >= r.size.0 && size <= r.size.1);
+        let selection = match (&explicit, &chosen) {
+            (Some(_), _) => "explicit",
+            (None, Some(c)) if in_range(c) => "inferred_in_range",
+            (None, Some(_)) => "inferred_nearest_range",
+            (None, None) => "none",
+        };
+        let candidates: Vec<&str> = interiority
+            .map(|i| environments.iter().filter(|(_, e)| i >= e.interiority.0 && i <= e.interiority.1).map(|(n, _)| n.as_str()).collect())
+            .unwrap_or_default();
         room_out.insert(
             guid.clone(),
             json!({
@@ -330,6 +367,8 @@ pub(crate) fn add_package_audio(db: &Database<'_>, p4k: &MappedP4k, files: &mut 
                 "size_m": size,
                 "interiority": interiority,
                 "environment": chosen,
+                "selection": selection,
+                "candidates": candidates,
                 "rule": if explicit.is_some() { "explicit AudioPropagationParams.audioEnvironment" } else { "size = cbrt(volume); AudioEnvironment interiority and size ranges" },
             }),
         );

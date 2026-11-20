@@ -143,6 +143,10 @@ pub fn export_player(p4k: &MappedP4k, db: &Database, request: &PlayerRequest) ->
         "camera_bone":PLAYER_CAMERA_BONE,"root_motion_bone":bones.iter().find(|b|b.parent_index.is_none()).ok_or_else(||error("root joint missing"))?.name,
         "weapon_selection":request.weapons,"spare_attachments":request.spare_attachments,"weapons":weapons,"flashlights":flashlights,"motion":motion,"blend_spaces":spaces,"diagnostics":diagnostics});
     export.files[scene_index].bytes = serde_json::to_vec_pretty(&scene).map_err(|e| error(e.to_string()))?;
+    // WP-A1: the package audio again, now that the rigid items (flashlight, weapons) are children of the scene.
+    if let Some(package_name) = package.strip_prefix("Packages/") {
+        crate::decomposed_audio::refresh_package_audio(db, p4k, &mut export.files, package_name);
+    }
     // Shared assets from nested packages must have identical bytes, never silently overwrite.
     let mut seen = std::collections::BTreeMap::new();
     for f in std::mem::take(&mut export.files) {

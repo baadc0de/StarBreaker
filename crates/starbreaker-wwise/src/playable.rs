@@ -139,6 +139,8 @@ pub struct ContainerPlay {
     pub transition: &'static str,
     pub transition_s: f32,
     pub transition_random_s: (f32, f32),
+    /// Global scope (flag bit 4): one sequence / avoid-repeat history for every game object; otherwise one per object.
+    pub global: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -370,6 +372,7 @@ impl<'l, 'p> Resolver<'l, 'p> {
                     transition: transition_name(c.transition_mode),
                     transition_s: c.transition_time / 1000.0,
                     transition_random_s: (c.transition_time_mod_min / 1000.0, c.transition_time_mod_max / 1000.0),
+                    global: c.flags & 0x10 != 0,
                 };
                 let kind = if c.mode == 1 {
                     NodeKind::Sequence { restart_backward: c.flags & 0x04 != 0, play }
@@ -424,7 +427,26 @@ impl<'l, 'p> Resolver<'l, 'p> {
         let index = self.out.nodes.len();
         self.node_index.insert(id, index);
         self.out.nodes.push(PlayNode { id, kind, children: Vec::new(), props, effective });
-        let children: Vec<usize> = child_ids.iter().filter_map(|&c| self.node(banks, home, c, depth + 1)).collect();
+        // Children that resolve, with their authored positions: a dropped child takes its weight and blend
+        // associations with it.
+        let mut kept = Vec::new();
+        let mut children = Vec::new();
+        for (i, &c) in child_ids.iter().enumerate() {
+            if let Some(n) = self.node(banks, home, c, depth + 1) {
+                kept.push(i);
+                children.push(n);
+            }
+        }
+        match &mut self.out.nodes[index].kind {
+            NodeKind::Random { weights, .. } => *weights = kept.iter().filter_map(|&i| weights.get(i).copied()).collect(),
+            NodeKind::Blend { layers } => {
+                for layer in layers {
+                    let assoc = std::mem::take(&mut layer.children);
+                    layer.children = assoc.into_iter().filter_map(|(i, c)| kept.iter().position(|&k| k == i).map(|n| (n, c))).collect();
+                }
+            }
+            _ => {}
+        }
         self.out.nodes[index].children = children;
         Some(index)
     }
@@ -511,11 +533,16 @@ impl<'l, 'p> Resolver<'l, 'p> {
             bus: bases.iter().map(|b| b.override_bus_id).find(|&b| b != 0),
             ..Effective::default()
         };
+        // Positioning is one override: the nearest node that overrides it gives listener-relative routing (bit 1),
+        // the spatialisation mode (3D bits 0-1: 0 none, 1 position, 2 position and orientation; panning only when not
+        // none), the attenuation switch (3D bit 3) and the attenuation itself (that node's AttenuationID; none if it
+        // has none). Attenuation ids stored below the override are inactive.
         if let Some(pos) = bases.iter().find(|b| b.positioning.bits_positioning & 0x01 != 0) {
-            out.spatial = pos.positioning.bits_positioning & 0x02 != 0;
-            let attenuation_enabled = pos.positioning.bits_3d.is_none_or(|bits| bits & 0x08 != 0);
-            if out.spatial && attenuation_enabled {
-                out.attenuation = bases.iter().find_map(|b| b.properties.u32(prop_id::ATTENUATION_ID)).filter(|&a| a != 0);
+            let relative = pos.positioning.bits_positioning & 0x02 != 0;
+            let bits = pos.positioning.bits_3d.unwrap_or(0);
+            out.spatial = relative && bits & 0x03 != 0;
+            if relative && bits & 0x08 != 0 {
+                out.attenuation = pos.properties.u32(prop_id::ATTENUATION_ID).filter(|&a| a != 0);
             }
         }
         if let Some(aux) = bases.iter().find(|b| b.aux_params.flags & 0x01 != 0) {

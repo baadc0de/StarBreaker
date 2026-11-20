@@ -2339,7 +2339,7 @@ pub(crate) fn write_decomposed_export(
     })
 }
 
-fn classify_exported_file_kind(relative_path: &str) -> ExportedFileKind {
+pub(crate) fn classify_exported_file_kind(relative_path: &str) -> ExportedFileKind {
     if relative_path.ends_with(".materials.json") {
         ExportedFileKind::MaterialSidecar
     } else if relative_path.ends_with(".glb") || relative_path.ends_with(".blend") {

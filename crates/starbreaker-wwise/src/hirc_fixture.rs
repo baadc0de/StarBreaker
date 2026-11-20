@@ -14,8 +14,10 @@ pub struct Base {
     pub props: Vec<(u8, u32)>,
     /// `(prop id, min, max)`.
     pub random: Vec<(u8, f32, f32)>,
-    /// Override positioning: `Some(spatial)`.
+    /// Override positioning: `Some(listener-relative 3D)`.
     pub positioning: Option<bool>,
+    /// The 3D bits of a 3D positioning override (default `0x09`: position spatialisation, attenuation on).
+    pub bits3d: Option<u8>,
     /// Aux flags (bit0 override game aux, bit1 use game aux, bit2 override user aux, bit3 has aux ids).
     pub aux_flags: u8,
     pub aux_ids: [u32; 4],
@@ -44,7 +46,7 @@ pub fn node_base(b: &Base) -> Vec<u8> {
         d.extend_from_slice(&r.2.to_le_bytes());
     }
     match b.positioning {
-        Some(true) => d.extend_from_slice(&[0x03, 0x09]), // override + 3D; bits3d: position spatialisation, attenuation on
+        Some(true) => d.extend_from_slice(&[0x03, b.bits3d.unwrap_or(0x09)]), // override + 3D; bits3d
         Some(false) => d.push(0x01),
         None => d.push(0x00),
     }
@@ -198,6 +200,11 @@ pub fn library(atl: crate::AtlIndex, banks: Vec<(&str, Vec<HircEntry>, Vec<(u32,
 
 /// A bus (`aux` → type 18) with `(prop id, f32)` props, one optional effect slot and one optional volume RTPC curve.
 pub fn bus(id: u32, parent: u32, aux: bool, props: &[(u8, f32)], effect: Option<u32>, rtpc: Option<(u32, Vec<(f32, f32, u32)>)>) -> HircEntry {
+    bus_with_fx_bits(id, parent, aux, props, effect, 2, rtpc)
+}
+
+/// [`bus`] with the effect slot's bit vector (bit 0 bypass, bit 1 share set).
+pub fn bus_with_fx_bits(id: u32, parent: u32, aux: bool, props: &[(u8, f32)], effect: Option<u32>, fx_bits: u8, rtpc: Option<(u32, Vec<(f32, f32, u32)>)>) -> HircEntry {
     let mut d = Vec::new();
     d.extend_from_slice(&parent.to_le_bytes());
     if parent == 0 {
@@ -222,7 +229,7 @@ pub fn bus(id: u32, parent: u32, aux: bool, props: &[(u8, f32)], effect: Option<
         Some(fx) => {
             d.extend_from_slice(&[1, 0, 0]);
             d.extend_from_slice(&fx.to_le_bytes());
-            d.push(2);
+            d.push(fx_bits);
         }
         None => d.push(0),
     }

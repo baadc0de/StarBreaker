@@ -196,7 +196,14 @@ pub fn decode_impulse_response(media: &[u8]) -> Result<ImpulseResponse, IrError>
     if p.len() != need {
         return Err(err(&format!("payload is {} bytes, layout needs {need}", p.len())));
     }
-    let mut samples = vec![0.0f32; partitions * partition * ch];
+    // The declared length (trailing silent partitions are not stored) must be addressable before allocating: checked
+    // arithmetic, a frame count that fits the u32 the header's fields use, and a non-zero rate.
+    let len = partitions
+        .checked_mul(partition)
+        .filter(|frames| u32::try_from(*frames).is_ok() && sample_rate > 0)
+        .and_then(|frames| frames.checked_mul(ch))
+        .ok_or_else(|| err("declared IR length out of range"))?;
+    let mut samples = vec![0.0f32; len];
     let mut at = data_start;
     let mut spectrum = vec![(0.0f32, 0.0f32); fft];
     for (k, &nb) in bins.iter().enumerate() {

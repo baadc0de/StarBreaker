@@ -82,3 +82,29 @@ fn c2_lift_sound_effects_from_datacore() {
     assert!(envs.iter().any(|(n, e)| n.starts_with("VERB_SYS_INT") && e.interiority.1 == 1.0));
 }
 
+
+/// Untriggered placed spots are extra positions of the spots that link them (`audio_entities`), decided before class
+/// defaults merge. That is only sound while no entity class carrying `AudioTriggerSpotParams` authors a default
+/// trigger; this checks the whole DataCore so a build that adds one fails here.
+#[test]
+fn no_audio_trigger_spot_class_authors_a_default_trigger() {
+    let Some(p4k) = crate::test_p4k::p4k() else { return };
+    let dcb = p4k.read_file(r"Data\Game2.dcb").or_else(|_| p4k.read_file(r"Data\Game.dcb")).unwrap();
+    let db = Database::from_bytes(&dcb).unwrap();
+    let mut classes = AudioClasses::default();
+    let mut with_component = 0;
+    let mut with_trigger = Vec::new();
+    for record in db.records_by_type_name("EntityClassDefinition") {
+        let guid = record.id.to_string();
+        let defaults = classes.class_defaults(&db, Some(&guid), "AudioTriggerSpotParams");
+        if defaults.is_empty() {
+            continue;
+        }
+        with_component += 1;
+        if defaults.iter().any(|(k, v)| k.ends_with(".audioTrigger") && v.as_str().is_some_and(|s| !s.trim().is_empty())) {
+            with_trigger.push(db.resolve_string2(record.name_offset).to_owned());
+        }
+    }
+    assert!(with_component > 0);
+    assert!(with_trigger.is_empty(), "{} of {with_component} spot classes author a default trigger: {with_trigger:?}", with_trigger.len());
+}

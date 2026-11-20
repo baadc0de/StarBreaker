@@ -13,7 +13,21 @@ fn curves_interpolate_linear_and_hold_constant_and_clamp() {
     let shaped = [(0.0, 0.0, 8), (1.0, 1.0, 4)];
     assert!((evaluate(&shaped, 0.5) - 0.125).abs() < 1e-6, "exp3 is t^3");
     let s = [(0.0, 0.0, 3), (1.0, 1.0, 4)];
-    assert!((evaluate(&s, 0.5) - 0.5).abs() < 1e-5 && (evaluate(&s, 0.25) - 0.3264).abs() < 1e-3, "inverse S-curve");
+    assert!((evaluate(&s, 0.25) - 0.353_553).abs() < 1e-4 && (evaluate(&s, 0.75) - 0.646_447).abs() < 1e-4, "inverse S-curve");
+}
+
+/// The non-linear shapes (Wwise's `AkInterpolation`, as wwiser's renderer reproduces it) at interior points.
+#[test]
+fn non_linear_shapes_match_the_reference_forms() {
+    let at = |shape: u32, t: f32| evaluate(&[(0.0, 0.0, shape), (1.0, 1.0, 4)], t);
+    assert!((at(6, 0.25) - 0.156_25).abs() < 1e-6, "exp1 (t + 1) t / 2");
+    assert!((at(2, 0.25) - 0.343_75).abs() < 1e-6, "log1 t (3 - t) / 2");
+    assert!((at(5, 0.25) - 0.146_447).abs() < 1e-4, "S-curve (1 - cos pi t) / 2");
+    assert!((at(0, 0.5) - 0.875).abs() < 1e-6, "log3 1 - (1 - t)^3");
+    assert!((at(1, 0.5) - 0.707_107).abs() < 1e-4, "sine sin(pi t / 2)");
+    assert!((at(7, 0.5) - 0.292_893).abs() < 1e-4, "sine reciprocal 1 - cos(pi t / 2)");
+    // A falling segment uses the same shape from the left point to the right one.
+    assert!((evaluate(&[(0.0, 1.0, 6), (1.0, 0.0, 4)], 0.25) - 0.843_75).abs() < 1e-6);
 }
 
 #[test]
@@ -62,4 +76,19 @@ fn a_peak_limiter_slot_carries_its_parameters() {
     let l = fx.limiter.as_ref().expect("limiter parameters");
     assert_eq!((l.threshold_db, l.ratio, l.look_ahead_s, l.release_s, l.output_level_db), (-1.5, 20.0, 0.01, 0.25, -0.5));
     assert!(l.process_lfe && l.channel_link);
+}
+
+#[test]
+fn a_bypassed_effect_slot_says_so() {
+    let objects = vec![
+        bus_with_fx_bits(1, 0, false, &[], Some(60), 0x03, None),
+        bus(2, 1, false, &[], Some(61), None),
+        peak_limiter_share_set(60, -1.0, 10.0, 0.01, 0.1, 0.0),
+        peak_limiter_share_set(61, -1.0, 10.0, 0.01, 0.1, 0.0),
+    ];
+    let lib = library(atl(&[], &[]), vec![("Init.bnk", objects, Vec::new())]);
+    let r = crate::playable::Resolver::new(&lib);
+    let chain = bus_chain(&r, 2);
+    assert!(!chain[0].1.effects[0].bypass);
+    assert!(chain[1].1.effects[0].bypass, "bit 0 of the slot's bit vector");
 }
