@@ -953,6 +953,9 @@ fn interior_ui_bindings_for_mesh(
         binding.source_item_type = source.as_ref().and_then(|(record, _)| {
             super::child_payload::entity_record_attach_def_type(db, record)
         });
+        binding.interaction_distance = source.as_ref().and_then(|(record, _)| {
+            super::child_payload::entity_record_ui_interaction_distance(db, record)
+        });
         // An operated UI renders with its owner's values (class user variables with this placement's instance
         // values, its state machine).
         if super::ui_owner_values::is_operated_panel(&binding)
@@ -1788,6 +1791,16 @@ mod tests {
         assert!(!hud[0].source_kiosk_interaction && !mfd[0].source_kiosk_interaction);
         assert!(door[0].source_kiosk_interaction); // door panels are operated through the same component
         assert!(lift[0].source_kiosk_interaction);
+        // scviewer hangar-waypoints: how far the player may stand from the screen
+        // (UIRenderToTextureEntityComponentParams.interactionDistance, metres), on both paths. The generic door pad is
+        // operated from 2 m; the Starlifter's ramp and hatch pads, which sit on the outside of the closed door several
+        // metres above the ground, from 15 m.
+        assert_eq!(door[0].interaction_distance, Some(2.0));
+        for class in ["ControlPanel_Screen_DoorControl_Starlifter_Exterior_Button", "ControlPanel_Screen_DoorControl_Starlifter_Interior_Button"] {
+            let pad = super::interior_ui_bindings_for_mesh(&db, &mesh(None, Some(class), None));
+            assert_eq!(pad.len(), 1, "{class}");
+            assert_eq!(pad[0].interaction_distance, Some(15.0), "{class}");
+        }
     }
 
     fn test_ui_binding() -> UiBinding {
@@ -1825,6 +1838,7 @@ mod tests {
             source_item_type: None,
             source_owner_resolved: false,
             source_kiosk_interaction: false,
+            interaction_distance: None,
             ui_texture_aspect_w_over_h: None,
             user_variables: Vec::new(),
             state_types: Vec::new(),

@@ -2672,6 +2672,7 @@ fn ui_binding_json(binding: &UiBinding) -> serde_json::Value {
         "source_item_type": binding.source_item_type,
         "source_owner_resolved": binding.source_owner_resolved,
         "source_kiosk_interaction": binding.source_kiosk_interaction,
+        "interaction_distance": binding.interaction_distance,
         "ui_texture_aspect_w_over_h": binding.ui_texture_aspect_w_over_h,
         "user_variables": binding.user_variables,
         "state_types": binding.state_types,
@@ -4023,6 +4024,18 @@ mod manufacturer_id_tests {
         assert_eq!(super::ui_binding_json(&binding)["source_kiosk_interaction"], false);
     }
 
+    /// scviewer hangar-waypoints: the operating distance of the owner's screen is part of the contract (metres; null
+    /// without a render-to-texture UI).
+    #[test]
+    fn ui_binding_json_carries_interaction_distance() {
+        let mut binding = UiBinding { binding_kind: "physical".into(), ..Default::default() };
+        let json = super::ui_binding_json(&binding);
+        assert!(json.as_object().unwrap().contains_key("interaction_distance"));
+        assert!(json["interaction_distance"].is_null());
+        binding.interaction_distance = Some(15.0);
+        assert_eq!(super::ui_binding_json(&binding)["interaction_distance"], 15.0);
+    }
+
     #[test]
     fn ui_generated_path_is_structured() {
         let binding = UiBinding {
@@ -4059,6 +4072,7 @@ mod manufacturer_id_tests {
             source_item_type: None,
             source_owner_resolved: false,
             source_kiosk_interaction: false,
+            interaction_distance: None,
             ui_texture_aspect_w_over_h: None,
             user_variables: Vec::new(),
             state_types: Vec::new(),

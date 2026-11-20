@@ -862,6 +862,11 @@ pub struct UiBinding {
     /// Whether that entity has a `KioskInteractionEntityComponentParams` component: the player operates its UI (door and
     /// light panels, transit panels, ship-selector and freight kiosks), unlike a display only shown (MFDs, HUDs, signage).
     pub source_kiosk_interaction: bool,
+    /// How far the player may stand from the UI owner's screen and still operate it, in metres:
+    /// `UIRenderToTextureEntityComponentParams.interactionDistance` of that entity (most door pads 2, the Starlifter's
+    /// ramp and hatch pads, which sit high on the closed door, 15). `None` when the owner has no render-to-texture UI
+    /// or is unresolved. Not part of the render identity.
+    pub interaction_distance: Option<f32>,
     /// Aspect (width / height) at which the render target lands undistorted on the entity's display faces, measured in
     /// texture space on its `$RenderToTexture` faces (`ui_pipeline::screen_aspect::render_target_texture_aspect`).
     /// Measured for interior placements (door and light pads, transit panels); sizes the render (part of its identity).

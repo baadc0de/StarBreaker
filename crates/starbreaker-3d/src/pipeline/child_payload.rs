@@ -620,6 +620,15 @@ pub(crate) fn entity_record_has_kiosk_interaction(db: &Database, record: &starbr
     query_value_path(db, record, "Components[KioskInteractionEntityComponentParams]").is_some()
 }
 
+/// `UIRenderToTextureEntityComponentParams.interactionDistance` (metres): how far from its screen the player operates
+/// the entity's UI. `None` without a render-to-texture UI or a positive value.
+pub(crate) fn entity_record_ui_interaction_distance(db: &Database, record: &starbreaker_datacore::types::Record) -> Option<f32> {
+    query_value_path(db, record, "Components[UIRenderToTextureEntityComponentParams].interactionDistance")
+        .as_ref()
+        .and_then(super::interior_entities::number)
+        .filter(|d| d.is_finite() && *d > 0.0)
+}
+
 pub(crate) fn entity_record_attach_def_type(
     db: &Database,
     record: &starbreaker_datacore::types::Record,
@@ -700,6 +709,7 @@ fn ui_binding_for_record_base(db: &Database, record: &Record) -> Option<UiBindin
                 source_item_type: entity_record_attach_def_type(db, record),
                 source_owner_resolved: true,
                 source_kiosk_interaction: entity_record_has_kiosk_interaction(db, record),
+                interaction_distance: entity_record_ui_interaction_distance(db, record),
                 ui_texture_aspect_w_over_h: None,
                 user_variables: Vec::new(),
                 state_types: Vec::new(),
@@ -761,6 +771,7 @@ fn ui_binding_for_record_base(db: &Database, record: &Record) -> Option<UiBindin
                 source_item_type: entity_record_attach_def_type(db, record),
                 source_owner_resolved: true,
                 source_kiosk_interaction: entity_record_has_kiosk_interaction(db, record),
+                interaction_distance: entity_record_ui_interaction_distance(db, record),
                 ui_texture_aspect_w_over_h: None,
                 user_variables: Vec::new(),
                 state_types: Vec::new(),
@@ -919,6 +930,7 @@ fn ui_binding_for_record_base(db: &Database, record: &Record) -> Option<UiBindin
         source_item_type: entity_record_attach_def_type(db, record),
         source_owner_resolved: true,
         source_kiosk_interaction: entity_record_has_kiosk_interaction(db, record),
+        interaction_distance: entity_record_ui_interaction_distance(db, record),
         ui_texture_aspect_w_over_h: None,
         user_variables: Vec::new(),
         state_types: Vec::new(),

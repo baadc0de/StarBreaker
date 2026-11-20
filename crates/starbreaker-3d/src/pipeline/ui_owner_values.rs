@@ -325,6 +325,7 @@ mod tests {
             source_item_type: item.map(str::to_string),
             source_owner_resolved: resolved,
             source_kiosk_interaction: kiosk,
+            interaction_distance: None,
             ..Default::default()
         };
         assert!(is_operated_panel(&b("physical", Some("ControlPanel"), true, false)), "a light panel without a kiosk");
