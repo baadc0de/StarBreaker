@@ -2644,6 +2644,7 @@ fn interior_container_json(container: &InteriorContainerRecord) -> serde_json::V
                 "interaction_links": placement.identity.interaction_links,
                 "parent_attachment": placement.identity.parent,
                 "door": placement.identity.door,
+                "ladder": placement.identity.ladder,
                 "interaction_points": placement.identity.interaction_points,
                 "item_port_links": placement.identity.item_port_links,
                 "sendable_interactions": placement.identity.sendable_interactions,

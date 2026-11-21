@@ -99,6 +99,12 @@ fn component<'a>(xml: &CryXml<'a>, entity: &CryXmlNode, type_name: &str) -> Opti
 /// Instance overrides of the components this exporter reads.
 pub(crate) fn overrides(xml: &CryXml, entity: &CryXmlNode) -> EntityOverrides {
     let mut out = EntityOverrides::default();
+    if let Some(ladder) = component(xml, entity, "LadderComponentParams") {
+        out.ladder_fields = xml.node_attributes(ladder)
+            .filter(|(key, _)| !key.starts_with("__"))
+            .map(|(key, value)| (key.to_owned(), value.to_owned()))
+            .collect();
+    }
     if let Some(door) = component(xml, entity, "SCItemDoorParams") {
         out.door_animation_speed = attr(xml, door, "DoorAnimationSpeed").and_then(|v| v.parse().ok());
         out.use_auto_close_delay = attr(xml, door, "UseAutoCloseDelay").map(|v| v == "1" || v.eq_ignore_ascii_case("true"));

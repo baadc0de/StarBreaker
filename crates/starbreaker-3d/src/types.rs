@@ -1300,6 +1300,8 @@ pub struct ParentAttachment {
 /// value applies.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct EntityOverrides {
+    /// Scalar `LadderComponentParams` instance values, merged into the class component by field type.
+    pub ladder_fields: std::collections::BTreeMap<String, String>,
     /// `SCItemDoorParams@DoorAnimationSpeed`.
     pub door_animation_speed: Option<f32>,
     /// `SCItemDoorParams@UseAutoCloseDelay`.
@@ -1422,6 +1424,8 @@ pub struct PlacementIdentity {
     pub interaction_links: Vec<InteractionLink>,
     /// The entity this one rides (`ParentEntityCryGUID`, WP-P5).
     pub parent: Option<ParentAttachment>,
+    /// Ladder definition and player actions for a placed ladder class.
+    pub ladder: Option<serde_json::Value>,
     /// Door timing, for an entity whose class has `SCItemDoorParams`.
     pub door: Option<DoorTiming>,
     /// The class's interaction points and their interactions.

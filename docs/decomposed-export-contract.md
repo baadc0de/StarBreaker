@@ -1865,3 +1865,12 @@ The separate player-clip archive has `Packages/player_clips/scene.json` first,
 with the skeleton identity, unsupported or missing requests and the usual
 `root_entity.animations` index and sidecars. It contains no mesh or texture
 dependencies. Clip names are requested as a deduplicated, case-insensitive set.
+
+### Interior ladder placements
+
+An interior placement whose entity class has `LadderComponentParams` can carry a `ladder` object.
+`definition` holds the class component with scalar overrides from that .soc placement applied.
+`motion.config` holds the player actor's LadderConfig V2. `motion.actions` holds the unarmed walk
+mount, manually sampled climb and supported dismount fragments selected from the player's third-person
+Mannequin database. Action layers use the same animation, timing and procedural metadata as the seat
+records. Clients can request the referenced body clips using the separate player-clip archive.

@@ -22,3 +22,23 @@ fn seat_action_can_resolve_main_and_look_layers_independently() {
         "look"
     );
 }
+
+#[test]
+fn seat_transition_without_a_path_queries_the_template_and_state() {
+    let entrances = json!([
+        {"enter": {"interaction": "Board", "fragment_tags": null}},
+        {"exit": {"interaction": "Leave", "fragment_tags": "Right"}},
+        {"enter": {"interaction": null, "fragment_tags": null}}
+    ]);
+    let entrances: Vec<_> = entrances.as_array().unwrap().iter().collect();
+    assert_eq!(
+        transition_queries("trans_fixture", &entrances),
+        BTreeSet::from([
+            ("Enter", vec!["trans_fixture".into(), "Enter".into()]),
+            (
+                "Exit",
+                vec!["trans_fixture".into(), "Exit".into(), "Right".into()]
+            ),
+        ])
+    );
+}

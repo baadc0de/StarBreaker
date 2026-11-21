@@ -57,15 +57,7 @@ impl<'a> SeatMotion<'a> {
 
         let mut requests = BTreeSet::new();
         if let Some(template) = seat["transition_template"].as_str() {
-            for entrance in entrances {
-                for (field, state) in [("enter", "Enter"), ("exit", "Exit")] {
-                    if let Some(tags) = entrance[field]["fragment_tags"].as_str() {
-                        let mut query = vec![template.to_owned(), state.to_owned()];
-                        query.extend(ports::words(tags));
-                        requests.insert((state, query));
-                    }
-                }
-            }
+            requests.extend(transition_queries(template, entrances));
         }
         if let Some(template) = seat["control_template"].as_str() {
             for state in ["Deploy", "Retract", "Select", "Deselect", "Idle"] {
@@ -91,6 +83,30 @@ impl<'a> SeatMotion<'a> {
         }
         Ok(out)
     }
+}
+
+fn transition_queries(
+    template: &str,
+    entrances: &[&Value],
+) -> BTreeSet<(&'static str, Vec<String>)> {
+    entrances
+        .iter()
+        .flat_map(|entrance| {
+            [("enter", "Enter"), ("exit", "Exit")]
+                .into_iter()
+                .filter_map(move |(field, state)| {
+                    let step = &entrance[field];
+                    step["interaction"]
+                        .as_str()
+                        .filter(|name| !name.is_empty())?;
+                    let mut query = vec![template.to_owned(), state.to_owned()];
+                    if let Some(tags) = step["fragment_tags"].as_str() {
+                        query.extend(ports::words(tags));
+                    }
+                    Some((state, query))
+                })
+        })
+        .collect()
 }
 
 fn select<'a>(

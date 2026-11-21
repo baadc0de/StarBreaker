@@ -674,6 +674,8 @@ pub(crate) fn build_interiors_from_payloads(
     let mut sensor_resolver = super::interior_entities::SensorResolver::new(db);
     let mut interaction_resolver = super::interior_interactions::InteractionResolver::new(db, Some(p4k));
     let mut container_resolver = super::inventory_containers::ContainerResolver::new(db);
+    let mut ladder_classes: HashMap<String, Option<serde_json::Value>> = HashMap::new();
+    let mut ladder_motion = None;
 
     for payload in payloads {
         log::debug!(
@@ -803,7 +805,30 @@ pub(crate) fn build_interiors_from_payloads(
                     transform: im.transform,
                     palette,
                     ui_bindings,
-                    identity: super::interior_entities::placement_identity(im),
+                    identity: {
+                        use crate::character::player::ladder_motion as source;
+                        let mut identity = super::interior_entities::placement_identity(im);
+                        if let Some(guid) = &im.entity_class_guid
+                            && let Some(mut definition) = ladder_classes.entry(guid.clone()).or_insert_with(|| {
+                                super::interior_entities::class_record(db, im)
+                                    .and_then(|record| source::definition(db, record))
+                            }).clone()
+                        {
+                            source::apply_overrides(&mut definition, &im.entity.overrides.ladder_fields);
+                            let motion = ladder_motion.get_or_insert_with(|| {
+                                let index = entity_index.get_or_insert_with(|| {
+                                    starbreaker_datacore::loadout::EntityIndex::new(db)
+                                });
+                                source::resolve(p4k, db, index).map_err(|error| {
+                                    log::warn!("[interior] ladder motion: {error}");
+                                }).ok()
+                            });
+                            identity.ladder = motion.as_ref().map(|motion| {
+                                serde_json::json!({"definition": definition, "motion": motion})
+                            });
+                        }
+                        identity
+                    },
                 });
                 if im.entity.entity_id.is_some()
                     && let Some(port) = &im.entity.tile_port_name

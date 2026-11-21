@@ -17,6 +17,7 @@ mod flashlight;
 mod loadouts;
 mod sources;
 mod seat_motion;
+pub(crate) mod ladder_motion;
 pub use export::export_player;
 pub use action_clips::{PlayerClipsRequest, export_player_clips};
 pub(crate) use seat_motion::SeatMotion;
