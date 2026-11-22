@@ -699,6 +699,15 @@ Each light record (built in `decomposed.rs` from the `LightInfo` parsed in
   the exported texture, `.exr` when the source is HDR (BC6H), otherwise `.png`
   (a white PNG fallback if both fail); `null` for non-projector lights
 - `light_style`, the active state's authored style (also retained per state)
+- `animation_speed`, `animation_phase` and `random_animation_phase` retain the
+  light component's shared style timing when authored.
+
+When a package has styled lights and the active game archive supplies the
+table, the top-level `light_styles` object maps style IDs to
+`{samples_per_second, samples}`. Samples are linear RGB multipliers in authored
+order. Constant styles may omit the sample rate. The exporter reads
+`LightStyles` from the tokenized `Light.cfxb` in the installed Vulkan shader cache,
+with the D3D11 cache as a fallback.
 - `active_state` and a `states` map capturing every authored CryEngine state
   (`offState`, `defaultState`, `auxiliaryState`, `emergencyState`,
   `cinematicState`; missing states are absent). An authored `defaultState` is

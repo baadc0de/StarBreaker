@@ -1072,6 +1072,15 @@ pub struct LightInfo {
     pub parent_entity_id: Option<String>,
     /// Active state's authored style, also preserved in states.
     pub light_style: Option<i32>,
+    /// Authored playback speed multiplier shared by all states.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub animation_speed: Option<f32>,
+    /// Authored phase offset in source units.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub animation_phase: Option<f32>,
+    /// Whether the game randomizes this light's initial phase.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub random_animation_phase: Option<bool>,
     pub name: String,
     /// Position in CryEngine coordinates (relative to container).
     pub position: [f64; 3],

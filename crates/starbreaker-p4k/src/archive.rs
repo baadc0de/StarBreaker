@@ -180,7 +180,27 @@ impl<'a> P4kArchive<'a> {
     pub fn read_from_file_at(file: &std::fs::File, entry: &P4kEntry) -> Result<Vec<u8>, P4kError> {
         use crate::posread::pread_exact;
 
-        let data_offset = if entry.has_local_header {
+        let data_offset = Self::file_data_offset(file, entry)?;
+        let mut raw = vec![0u8; entry.compressed_size as usize];
+        pread_exact(file, &mut raw, data_offset)?;
+
+        let hint = entry.uncompressed_size as usize;
+        match (entry.is_encrypted, entry.compression_method) {
+            (true, 100) => {
+                let decrypted = crypto::decrypt(&raw)?;
+                zstd_decompress(&decrypted, hint)
+            }
+            (false, 100) => zstd_decompress(&raw, hint),
+            (false, 8) => deflate_decompress(&raw, hint),
+            (false, 0) => Ok(raw),
+            (true, method) => Err(P4kError::EncryptedNonZstd(method)),
+            (_, method) => Err(P4kError::UnsupportedCompression(method)),
+        }
+    }
+
+    pub(crate) fn file_data_offset(file: &std::fs::File, entry: &P4kEntry) -> Result<u64, P4kError> {
+        use crate::posread::pread_exact;
+        if entry.has_local_header {
             let mut header_buf = [0u8; size_of::<LocalFileHeader>()];
             pread_exact(file, &mut header_buf, entry.offset)?;
             let local_header: LocalFileHeader = *zerocopy::FromBytes::ref_from_bytes(&header_buf)
@@ -198,28 +218,12 @@ impl<'a> P4kArchive<'a> {
                 });
             }
 
-            entry.offset
+            Ok(entry.offset
                 + size_of::<LocalFileHeader>() as u64
                 + local_header.file_name_length as u64
-                + local_header.extra_field_length as u64
+                + local_header.extra_field_length as u64)
         } else {
-            entry.offset
-        };
-
-        let mut raw = vec![0u8; entry.compressed_size as usize];
-        pread_exact(file, &mut raw, data_offset)?;
-
-        let hint = entry.uncompressed_size as usize;
-        match (entry.is_encrypted, entry.compression_method) {
-            (true, 100) => {
-                let decrypted = crypto::decrypt(&raw)?;
-                zstd_decompress(&decrypted, hint)
-            }
-            (false, 100) => zstd_decompress(&raw, hint),
-            (false, 8) => deflate_decompress(&raw, hint),
-            (false, 0) => Ok(raw),
-            (true, method) => Err(P4kError::EncryptedNonZstd(method)),
-            (_, method) => Err(P4kError::UnsupportedCompression(method)),
+            Ok(entry.offset)
         }
     }
 

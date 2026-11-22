@@ -153,6 +153,7 @@ fn authored_fields_and_zero_default_survive() {
         <shadowParams shadowCasting="1" maxShadowCastDist="37"/>
         <fadeParams minDistance="0" maxDistance="83"/>
         <miscParams glowMultiplier="2.5" attenuationTweak="0.125" planeSoftness="0.375"/>
+        <styleParams animationSpeed="0.625" animationPhase="11" randomAnimationPhase="1"/>
         <offState intensity="0"/>
         <defaultState intensity="0" temperature="4567" lightStyle="9"><color r="0.25" g="0.5" b="0.75"/></defaultState>
         <auxiliaryState intensity="3"/>
@@ -166,6 +167,7 @@ fn authored_fields_and_zero_default_survive() {
         "affects_this_area_only":true, "affect_gi":true, "attenuation_tweak":0.125,
         "plane_softness":0.375, "fade_min_distance_m":0.0, "fade_max_distance_m":83.0,
         "importance":-7, "glow_multiplier":2.5, "radius_m":19.0,
+        "animation_speed":0.625, "animation_phase":11.0, "random_animation_phase":true,
         "active_state":"defaultState", "intensity_raw":0.0, "intensity_candela_proxy":0.0,
         "intensity_candela_proxy_model":"raw_x1500", "color":[0.25,0.5,0.75], "light_style":9
     });

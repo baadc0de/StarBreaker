@@ -2,6 +2,7 @@ pub mod archive;
 pub mod crypto;
 pub mod discover;
 pub mod error;
+mod nested;
 pub mod owned;
 pub(crate) mod posread;
 pub mod types;

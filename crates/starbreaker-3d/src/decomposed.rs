@@ -2295,6 +2295,21 @@ pub(crate) fn write_decomposed_export(
         input.weapon_assembly.as_ref(),
         opts,
     );
+    let has_styled_lights = |lights: &[serde_json::Value]| {
+        lights.iter().any(|light| {
+            light["states"].as_object().is_some_and(|states| {
+                states
+                    .values()
+                    .any(|state| state["light_style"].as_i64().is_some_and(|id| id > 0))
+            })
+        })
+    };
+    if (entity_light_records.values().any(|lights| has_styled_lights(lights))
+        || interior_records.iter().any(|interior| has_styled_lights(&interior.lights)))
+        && let Some(styles) = crate::light_style::load(p4k)
+    {
+        scene_manifest["light_styles"] = serde_json::json!(styles);
+    }
     scene_manifest["root_entity"]["lights"] = serde_json::json!(
         entity_light_records.remove(&input.entity_name).unwrap_or_default());
     scene_manifest["root_entity"]["vehicle_light_ports"] = serde_json::json!(light_ports.remove(&input.entity_name).unwrap_or_default());
