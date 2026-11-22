@@ -701,13 +701,6 @@ Each light record (built in `decomposed.rs` from the `LightInfo` parsed in
 - `light_style`, the active state's authored style (also retained per state)
 - `animation_speed`, `animation_phase` and `random_animation_phase` retain the
   light component's shared style timing when authored.
-
-When a package has styled lights and the active game archive supplies the
-table, the top-level `light_styles` object maps style IDs to
-`{samples_per_second, samples}`. Samples are linear RGB multipliers in authored
-order. Constant styles may omit the sample rate. The exporter reads
-`LightStyles` from the tokenized `Light.cfxb` in the installed Vulkan shader cache,
-with the D3D11 cache as a fallback.
 - `active_state` and a `states` map capturing every authored CryEngine state
   (`offState`, `defaultState`, `auxiliaryState`, `emergencyState`,
   `cinematicState`; missing states are absent). An authored `defaultState` is
@@ -716,6 +709,13 @@ with the D3D11 cache as a fallback.
   positive-intensity state in `auxiliary → emergency → cinematic` order.
   If none qualifies, `active_state` is empty and the flat intensity is zero. The full map lets the Blender addon switch between
   states at runtime without re-exporting.
+
+When a package has styled lights and the active game archive supplies the
+table, the top-level `light_styles` object maps style IDs to
+`{samples_per_second, samples}`. Samples are linear RGB multipliers in authored
+order. Constant styles may omit the sample rate. The exporter reads
+`LightStyles` from the tokenized `Light.cfxb` in the installed Vulkan shader cache,
+with the D3D11 cache as a fallback.
 
 Each `states` entry carries `intensity_raw`, `intensity_unit`, `intensity_cd`,
 `intensity_candela_proxy`, `intensity_candela_proxy_model` (`"raw_x1500"`),

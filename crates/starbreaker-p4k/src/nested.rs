@@ -1,6 +1,6 @@
 //! Read a member of a ZIP stored uncompressed inside a P4k (e.g. a shader cache).
 use std::fs::File;
-use std::io::{self, Read, Seek, SeekFrom};
+use std::io::{self, BufReader, Read, Seek, SeekFrom};
 
 use crate::archive::P4kArchive;
 use crate::error::P4kError;
@@ -29,13 +29,14 @@ impl MappedP4k {
                 io::Error::new(io::ErrorKind::InvalidData, "nested archive exceeds file").into(),
             );
         }
+        file.seek(SeekFrom::Start(start))?;
         let window = ArchiveWindow {
             file: &mut file,
             start,
             len: outer.uncompressed_size,
             pos: 0,
         };
-        let mut zip = zip::ZipArchive::new(window).map_err(zip_error)?;
+        let mut zip = zip::ZipArchive::new(BufReader::new(window)).map_err(zip_error)?;
         let mut member = zip.by_name(path).map_err(zip_error)?;
         let mut data = Vec::new();
         member.read_to_end(&mut data)?;

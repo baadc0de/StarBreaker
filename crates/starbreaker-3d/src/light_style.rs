@@ -179,6 +179,28 @@ mod tests {
             .expect("read Light.cfxb from the stored shader cache");
         let styles = decode(&shader).expect("decode the authored LightStyles table");
         assert!(styles.values().any(|s| s.samples.len() > 1));
+        // Compare independent measurements of the LIVE Vulkan member documented in
+        // WP-I1. Restrict the golden assertions to that archive revision.
+        let cache = archive
+            .entry_case_insensitive(r"Engine\ShaderCache_Vulkan.pak")
+            .unwrap();
+        if cache.crc32 == 0x54ae6542 {
+            assert_eq!(styles.len(), 89);
+            assert_eq!(
+                styles
+                    .values()
+                    .map(|style| style.samples.len())
+                    .sum::<usize>(),
+                5299
+            );
+            let style = &styles[&14];
+            assert_eq!(style.samples_per_second, Some(60.));
+            assert_eq!(style.samples.len(), 32);
+            assert_eq!(
+                &style.samples[..6],
+                &[[0.8; 3], [0.9; 3], [1.; 3], [0.9; 3], [0.8; 3], [0.; 3]]
+            );
+        }
     }
 
     #[test]
