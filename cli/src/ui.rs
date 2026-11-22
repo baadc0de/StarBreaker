@@ -155,14 +155,21 @@ fn run_render(
         let states: Vec<Vec<(&str, &str)>> = std::iter::once(Vec::new())
             .chain(binding.state_images.iter().map(state_image_pins))
             .collect();
-        let mut renders: Vec<(Vec<(&str, &str)>, Option<&str>)> = states.iter().map(|s| (s.clone(), None)).collect();
+        // (pins, hovered node, the exported file stem of a hover render: replayed under its own name).
+        let mut renders: Vec<(Vec<(&str, &str)>, Option<&str>, Option<String>)> = states.iter().map(|s| (s.clone(), None, None)).collect();
         renders.extend(binding.hover_images.iter().map(|h| {
-            (h.states.iter().map(|p| (p.state_type.as_str(), p.state.as_str())).collect(), Some(h.node.as_str()))
+            let stem = std::path::Path::new(&h.generated_image_path).file_stem().map(|s| s.to_string_lossy().into_owned());
+            (h.states.iter().map(|p| (p.state_type.as_str(), p.state.as_str())).collect(), Some(h.node.as_str()), stem)
         }));
         if let Some(node) = hover {
-            renders.extend(states.iter().map(|s| (s.clone(), Some(node))));
+            for s in &states {
+                // A node the export already rendered hovered for this state is replayed once, under its exported name.
+                if !renders.iter().any(|(pins, n, _)| pins == s && *n == Some(node)) {
+                    renders.push((s.clone(), Some(node), None));
+                }
+            }
         }
-        for (state, hovered) in renders {
+        for (state, hovered, exported_stem) in renders {
         let hovered = match (hovered, hover_tag.as_deref()) {
             (Some(node), Some(tag)) => Some((node, tag)),
             (Some(node), None) => {
@@ -175,13 +182,10 @@ fn run_render(
             Ok(render) => {
                 let png_bytes = render.png;
                 let plain = png_name_for_binding(binding, &state, texture_mip);
-                let file_name = match hovered {
-                    Some((node, _)) => format!(
-                        "{}__hover_{}.png",
-                        plain.trim_end_matches(".png"),
-                        node.replace(|c: char| !c.is_ascii_alphanumeric(), "_")
-                    ),
-                    None => plain,
+                let file_name = match (hovered, &exported_stem) {
+                    (Some(_), Some(stem)) => format!("{stem}_TEX{texture_mip}.png"),
+                    (Some((node, _)), None) => format!("{}__hover_{}.png", plain.trim_end_matches(".png"), hover_file_part(node)),
+                    (None, _) => plain,
                 };
                 let dest = out_dir.join(&file_name);
                 std::fs::write(&dest, &png_bytes)?;
@@ -340,6 +344,19 @@ fn parse_ui_binding(v: &Value) -> Option<UiBinding> {
 /// one (e.g. the medical bed) fall back to the human-readable content/canvas
 /// record name before the GUID, so replay outputs are findable without a
 /// content-match hunt (ledger item 31).
+/// A node name in a file name: its alphanumerics, and a digest of the name when anything else was replaced, so two names
+/// that differ only there (`Aux-Light`, `Aux_Light`) never share a file.
+fn hover_file_part(node: &str) -> String {
+    let clean: String = node.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
+    if clean == node {
+        return clean;
+    }
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    node.hash(&mut h);
+    format!("{clean}_{:08x}", h.finish() as u32)
+}
+
 /// The states a `state_images[]` entry pins: its `states`, else (a scene written before pairs) its `state_type`/`state`.
 fn state_image_pins(image: &starbreaker_3d::types::UiStateImage) -> Vec<(&str, &str)> {
     if !image.states.is_empty() {
@@ -388,6 +405,14 @@ fn png_name_for_binding(binding: &UiBinding, state: &[(&str, &str)], mip: u32) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Node names that differ only in replaced characters never share a replay file.
+    #[test]
+    fn hover_file_parts_keep_distinct_names_apart() {
+        assert_eq!(hover_file_part("DoorButton"), "DoorButton");
+        assert_ne!(hover_file_part("Aux-Light"), hover_file_part("Aux_Light"));
+        assert!(hover_file_part("Aux-Light").starts_with("Aux_Light_"));
+    }
 
     fn binding_with(helper: Option<&str>, content: Option<&str>, guid: Option<&str>) -> UiBinding {
         let mut binding = UiBinding::default();

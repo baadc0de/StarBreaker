@@ -72,17 +72,16 @@ fn a_styled_literal_fill_replaces_the_own_colour() {
     assert!((node.alpha - 1.0).abs() < 1e-4, "the literal fill's alpha, not the own 0.2: {}", node.alpha);
 }
 
-/// A styled ROLE fill (the cascade writes `FillColorToken` beside the resolved `FillColor`, its alpha the style's)
-/// tints with that role at that alpha: a modular-kit large button's background is `Base` at 0.3 at rest and 0.6 under
-/// the cursor (`RootBackgroundElementInstance` / `...Hover`), not the role at full strength.
+/// A styled role fill RESOLVED at style time carries its alpha in the RGBA, which the SVG fill applies: the node's alpha
+/// does not take it again (review: 0.3 applied twice would draw at 0.09).
 #[test]
-fn a_styled_role_fill_tints_at_the_styles_alpha() {
+fn a_resolved_styled_role_fill_is_not_alpha_scaled_twice() {
     let mut shape = door_status_shape(serde_json::Value::Null);
     shape["FillColorToken"] = serde_json::json!("Base");
     shape["FillColor"] = serde_json::json!({"r": 0.1, "g": 0.4, "b": 0.8, "a": 0.3});
     let node = compile(shape);
     assert_eq!(node.icon_tint_colour_token.as_deref(), Some("Base"));
-    assert!((node.alpha - 0.3).abs() < 1e-4, "the styled fill's alpha: {}", node.alpha);
+    assert!((node.alpha - 1.0).abs() < 1e-4, "the fill carries its alpha, the node none: {}", node.alpha);
 }
 
 /// The token-only form (an entries-only kit sheet could not resolve the RGBA at style time): the role's alpha is

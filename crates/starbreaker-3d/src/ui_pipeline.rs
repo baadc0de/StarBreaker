@@ -251,7 +251,7 @@ pub fn render_ui_binding(
             buttons: output
                 .click_targets
                 .into_iter()
-                .map(|t| crate::types::UiButton { node: t.node, interaction: t.trigger, rect_px: t.rect_px })
+                .map(|t| crate::types::UiButton { node: t.node, interaction: t.trigger, rect_px: t.rect_px, label: t.label })
                 .collect(),
         })
         .map_err(|e| e.to_string());

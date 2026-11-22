@@ -905,6 +905,9 @@ pub struct UiButton {
     pub interaction: String,
     /// The node's laid-out rectangle `[x, y, w, h]` in the image's pixels (origin top left).
     pub rect_px: [f32; 4],
+    /// The button's caption: the first resolved text of its subtree ("Auxiliary"); absent without one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 /// One user variable of a UI owner entity (`UserVariablesComponentParams`).

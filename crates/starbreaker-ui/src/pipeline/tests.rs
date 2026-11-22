@@ -166,6 +166,36 @@ fn click_targets_are_active_triggering_nodes_scaled_to_the_image() {
     );
 }
 
+/// WP-I1-4: a region's caption is the first resolved, non-empty text of the clickable node's active subtree, in node
+/// order (a light panel row's "Auxiliary" under its button node); none without one.
+#[test]
+fn click_targets_carry_the_buttons_caption() {
+    let mut ir: crate::ui_ir::UiIrDocument = serde_json::from_value(serde_json::json!({
+        "schema_version": 1, "canvas_guid": "g", "canvas_name": null, "target_width": 100, "target_height": 100,
+        "selected_style_source": null, "renderer_hint": "bb", "confidence": 100, "warnings": [],
+        "unresolved_references": [], "resolved_asset_refs": [], "missing_asset_refs": [], "nodes": []
+    }))
+    .unwrap();
+    let text = |mut n: crate::ui_ir::UiIrNode, t: &str| {
+        n.text_payload = Some(crate::ui_ir::UiIrTextPayload::Resolved { text: t.to_string() });
+        n
+    };
+    let mut button = click_node(1, None, true, [0.0, 0.0, 50.0, 50.0], &["Go"]);
+    button.children = vec![2, 3, 4];
+    let mut bare = click_node(5, None, true, [50.0, 0.0, 50.0, 50.0], &["Stop"]);
+    bare.children = vec![6];
+    ir.nodes = vec![
+        button,
+        text(click_node(2, Some(1), false, [0.0; 4], &[]), "Hidden"),
+        text(click_node(3, Some(1), true, [0.0; 4], &[]), "  "),
+        text(click_node(4, Some(1), true, [0.0; 4], &[]), "Auxiliary"),
+        bare,
+        click_node(6, Some(5), true, [0.0; 4], &[]),
+    ];
+    let labels: Vec<Option<String>> = click_targets(&ir, (100, 100)).into_iter().map(|t| t.label).collect();
+    assert_eq!(labels, [Some("Auxiliary".to_string()), None]);
+}
+
 /// The triggers are the `BuildingBlocks_TriggerURL` names of an interactable widget's `onLeftClick` (synthetic).
 #[test]
 fn left_click_triggers_need_an_enabled_interactable_widget() {

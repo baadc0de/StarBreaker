@@ -226,6 +226,25 @@ fn written_renders(
     written
 }
 
+/// The button nodes a hover render can be made for, in button order: the hover tag goes on every node of the name, so a
+/// name that two distinct buttons share (two regions) would light both and is left out (logged).
+pub(super) fn hoverable_nodes(buttons: &[crate::types::UiButton]) -> Vec<String> {
+    let mut nodes: Vec<String> = Vec::new();
+    let mut ambiguous: Vec<String> = Vec::new();
+    for button in buttons {
+        let distinct = buttons.iter().any(|other| other.node == button.node && other.rect_px != button.rect_px);
+        if distinct {
+            if !ambiguous.contains(&button.node) {
+                log::warn!("[ui] button node {:?} names two regions: no hover render (it would light both)", button.node);
+                ambiguous.push(button.node.clone());
+            }
+        } else if !nodes.contains(&button.node) {
+            nodes.push(button.node.clone());
+        }
+    }
+    nodes
+}
+
 /// The pairs of owner states the combined renders pin: one non-default state of each of two different state types the
 /// canvas binds (every such pair, as the single-state renders take every such state), in state-machine order.
 pub(super) fn bound_state_pairs(
@@ -388,17 +407,14 @@ pub(super) fn prerender_ui_bindings(
         return out;
     }
     let mut hover_jobs: Vec<(UiRenderKey, &UiBinding, Vec<(String, String)>)> = Vec::new();
-    for (key, binding) in &representatives {
+    // Only the panels a player operates (the consumer shows hover there; a cockpit MFD's dozens of pips would multiply
+    // the renders for nothing).
+    for (key, binding) in representatives.iter().filter(|(_, b)| crate::pipeline::ui_owner_values::is_operated_panel(b)) {
         for (written_key, pins) in written_renders(&out, key, binding) {
             let Some(Ok(render)) = out.render(&written_key) else { continue };
             let stem = out.stems.by_key.get(&written_key).cloned().unwrap_or_default();
             let pin_refs: Vec<(&str, &str)> = pins.iter().map(|(t, s)| (t.as_str(), s.as_str())).collect();
-            let mut nodes: Vec<String> = Vec::new();
-            for button in &render.buttons {
-                if !nodes.contains(&button.node) {
-                    nodes.push(button.node.clone());
-                }
-            }
+            let nodes = hoverable_nodes(&render.buttons);
             let mut hovers = Vec::new();
             for node in nodes {
                 let hover_key = ui_hover_key(binding, &pin_refs, &node);
@@ -469,6 +485,14 @@ mod tests {
         let pair = [("TypeA".to_string(), "A1".to_string()), ("TypeB".to_string(), "B1".to_string())];
         assert_eq!(states_image_stem("pad", &pair), "pad__typea_a1__typeb_b1");
         assert_ne!(ui_render_key(&binding, &[("TypeA", "A1"), ("TypeB", "B1")]), ui_render_key(&binding, &[("TypeA", "A1")]));
+    }
+
+    /// A node per button region: one node that two regions share would light both and gets no hover render.
+    #[test]
+    fn hoverable_nodes_skip_a_name_shared_by_two_regions() {
+        let b = |node: &str, x: f32| crate::types::UiButton { node: node.into(), interaction: "I".into(), rect_px: [x, 0.0, 10.0, 10.0], label: None };
+        let buttons = [b("Door", 0.0), b("Door", 0.0), b("Pip", 0.0), b("Pip", 20.0), b("Lock", 40.0)];
+        assert_eq!(hoverable_nodes(&buttons), ["Door", "Lock"]);
     }
 
     /// The cursor's button is part of the identity, and a hover render's stem names its button after its image's stem.

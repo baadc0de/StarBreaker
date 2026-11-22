@@ -93,6 +93,34 @@ use serde_json::json;
         assert!((alpha - 0.3).abs() < 1e-6, "{alpha}");
     }
 
+    /// A role the palette resolves writes its RGBA with the alpha in it and no token alpha (the fill applies it once).
+    #[test]
+    fn resolved_color_modifier_has_no_token_alpha() {
+        let mut scene = make_test_scene();
+        // A slot-indexed palette (as tests_colors): the role resolves (synthetic colours).
+        let palette = json!({"colorStyles": [
+            {"color": {"r": 0.1, "g": 0.4, "b": 0.8, "a": 1.0}}, {"color": {"r": 0.1, "g": 0.4, "b": 0.8, "a": 1.0}},
+            {"color": {"r": 0.1, "g": 0.4, "b": 0.8, "a": 1.0}}, {"color": {"r": 0.1, "g": 0.4, "b": 0.8, "a": 1.0}},
+            {"color": {"r": 0.1, "g": 0.4, "b": 0.8, "a": 1.0}}
+        ]});
+        let brand = BrandStyle {
+            identifier: "test_brand".to_string(),
+            entries: &[json!({
+                "modifiers": [{
+                    "_Type_": "BuildingBlocks_FieldModifierColor",
+                    "field": "FillColor",
+                    "color": {"_Type_": "BuildingBlocks_ColorStyle", "color": "Base", "alpha": 0.3}
+                }]
+            })],
+            raw: &palette,
+        };
+        apply_brand_modifiers(&mut scene, &brand, None);
+        let node = scene.nodes.get(&1).unwrap();
+        let a = node.raw.get("FillColor").and_then(|c| c.get("a")).and_then(|v| v.as_f64()).expect("the role resolves");
+        assert!((a - 0.3).abs() < 1e-6, "the RGBA carries the style's alpha: {a}");
+        assert!(node.raw.get("FillColorTokenAlpha").is_none(), "a resolved fill carries its own alpha");
+    }
+
     /// When a HIGHER-priority entry resolves token-only (entries-only
     /// palette), a stale RGBA written by an earlier pass for the same field
     /// must not shadow it at draw time: the medical close-button X kept its

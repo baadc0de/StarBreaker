@@ -763,6 +763,9 @@ pub struct UiClickTarget {
     pub trigger: String,
     /// The node's laid-out rectangle `[x, y, w, h]` in the rendered image's pixels.
     pub rect_px: [f32; 4],
+    /// The button's caption: the first resolved, non-empty text of its active subtree, in node order ("Auxiliary" on a
+    /// light panel row); `None` without one.
+    pub label: Option<String>,
 }
 
 /// A render with what the exporter publishes beside the PNG: its pixel size and click regions.
@@ -794,6 +797,22 @@ pub fn click_targets(ir: &UiIrDocument, image_size: (u32, u32)) -> Vec<UiClickTa
         }
         true
     };
+    // A button's caption: depth first through its active subtree, the first resolved non-empty text.
+    let label = |root: &crate::ui_ir::UiIrNode| -> Option<String> {
+        let mut stack = vec![root];
+        while let Some(n) = stack.pop() {
+            if !n.is_active {
+                continue;
+            }
+            if let Some(crate::ui_ir::UiIrTextPayload::Resolved { text }) = &n.text_payload
+                && !text.trim().is_empty()
+            {
+                return Some(text.trim().to_string());
+            }
+            stack.extend(n.children.iter().rev().filter_map(|c| by_id.get(c).copied()));
+        }
+        None
+    };
     let sx = image_size.0 as f32 / ir.target_width.max(1) as f32;
     let sy = image_size.1 as f32 / ir.target_height.max(1) as f32;
     ir.nodes
@@ -801,10 +820,12 @@ pub fn click_targets(ir: &UiIrDocument, image_size: (u32, u32)) -> Vec<UiClickTa
         .filter(|n| !n.left_click_triggers.is_empty() && active(n))
         .flat_map(|n| {
             let r = &n.computed_rect;
+            let caption = label(n);
             n.left_click_triggers.iter().map(move |trigger| UiClickTarget {
                 node: n.name.clone(),
                 trigger: trigger.clone(),
                 rect_px: [r.x * sx, r.y * sy, r.w * sx, r.h * sy],
+                label: caption.clone(),
             })
         })
         .collect()
