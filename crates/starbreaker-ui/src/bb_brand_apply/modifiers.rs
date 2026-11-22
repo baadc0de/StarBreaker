@@ -144,6 +144,15 @@ pub(super) fn apply_modifier(
                     }
                     write_color_token_to_raw(field_name, token.as_deref(), node);
                 }
+                // The role's alpha rides with its token (`<Field>TokenAlpha`): the render-time resolver that resolves the
+                // token takes the style's alpha too (a large button's `Base` background at 0.3, 0.6 under the cursor).
+                if let Some(obj) = node.raw.as_object_mut() {
+                    let key = format!("{field_name}TokenAlpha");
+                    match token.as_deref().and(value.get("alpha").and_then(|a| a.as_f64())) {
+                        Some(alpha) => obj.insert(key, serde_json::json!(alpha)),
+                        None => obj.remove(&key),
+                    };
+                }
             }
         }
         "BuildingBlocks_FieldModifierBoolean" => {

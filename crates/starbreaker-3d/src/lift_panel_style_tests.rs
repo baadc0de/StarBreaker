@@ -274,7 +274,7 @@ fn c2_lift_panel_style_from_game_data() {
     let manufacturer = crate::ui_pipeline::root_manufacturer_id("CRUS_Starlifter_C2");
     let loc = crate::ui_pipeline::UiLocData::load(&p4k);
     let ship = crate::ui_pipeline::UiShipData::derive(&db, "CRUS_Starlifter_C2");
-    let ir = crate::ui_pipeline::compile_ui_binding_ir_json(binding, &[], &db, &p4k, 0, manufacturer.as_deref(), &loc, &ship)
+    let ir = crate::ui_pipeline::compile_ui_binding_ir_json(binding, &[], None, &db, &p4k, 0, manufacturer.as_deref(), &loc, &ship)
         .expect("door pad IR");
     let ir: Value = serde_json::from_str(&ir).unwrap();
     // SB_LIFT_LABEL_DUMP=<dir>: the pad's IR and the label masks, for inspection.

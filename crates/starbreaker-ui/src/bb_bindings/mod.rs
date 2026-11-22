@@ -16,6 +16,8 @@ mod tests;
 #[cfg(test)]
 mod tests_numeric_ops;
 #[cfg(test)]
+mod tests_hover;
+#[cfg(test)]
 mod tests_state_tags;
 mod util;
 
@@ -51,7 +53,10 @@ pub struct ResolvedText {
 /// `TagFromBoolean` over `bindingid == selectedmfd`) are computed from the scene
 /// operations and appended here. Run before style application so style entries
 /// gated on those tags (selected/unselected name colours, the footer border
-/// colours) match correctly. Tags already present are not duplicated.
+/// colours) match correctly. Tags already present are not duplicated. The
+/// registry's hovered node ([`DefaultValueRegistry::hovered`]) gets the hover tag.
+///
+/// [`DefaultValueRegistry::hovered`]: crate::defaults::DefaultValueRegistry::hovered
 pub fn resolve_state_tags_into_scene(
     scene: &mut crate::bb_scene::BbScene,
     defaults: &crate::defaults::DefaultValueRegistry,
@@ -77,6 +82,14 @@ pub fn resolve_state_tags_into_scene(
                 if !node.style_tag_uuids.iter().any(|t| t.eq_ignore_ascii_case(&uuid)) {
                     node.style_tag_uuids.push(uuid);
                 }
+            }
+        }
+    }
+    // The engine's hover tag on the widget under the cursor (a render made for the player's aim): applied with the
+    // state tags so the standards' runtime styles, which run next, see it.
+    if let Some((hovered, tag)) = defaults.hovered() {
+        for node in scene.nodes.values_mut().filter(|n| n.name == hovered) {            if !node.style_tag_uuids.iter().any(|t| t.eq_ignore_ascii_case(tag)) {
+                node.style_tag_uuids.push(tag.to_string());
             }
         }
     }

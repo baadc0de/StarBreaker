@@ -182,6 +182,7 @@ pub(crate) fn resolve_container(
         if let Some(facts) = resolver.class(guid.as_deref()) {
             placement.identity.item_port_links = facts.item_port_links.clone();
             placement.identity.sendable_interactions = facts.sendable_interactions.clone();
+            placement.identity.usable_interactions = facts.usable_interactions.clone();
         }
     }
     // Ids some entity of the container links: a logic entity is listed when it links or is linked.

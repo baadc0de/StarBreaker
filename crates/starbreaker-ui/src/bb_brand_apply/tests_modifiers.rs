@@ -69,6 +69,30 @@ use serde_json::json;
         );
     }
 
+    /// The role's alpha rides with its token (`FillColorTokenAlpha`) when the palette cannot resolve the RGBA (a
+    /// modular-kit sheet: entries only), so the render-time resolver tints at the style's alpha (a large button's
+    /// `Base` background at 0.3).
+    #[test]
+    fn token_only_color_modifier_keeps_the_roles_alpha() {
+        let mut scene = make_test_scene();
+        let brand = BrandStyle {
+            identifier: "test_brand".to_string(),
+            entries: &[json!({
+                "modifiers": [{
+                    "_Type_": "BuildingBlocks_FieldModifierColor",
+                    "field": "FillColor",
+                    "color": {"_Type_": "BuildingBlocks_ColorStyle", "color": "Base", "alpha": 0.3}
+                }]
+            })],
+            raw: &json!({}),
+        };
+        apply_brand_modifiers(&mut scene, &brand, None);
+        let node = scene.nodes.get(&1).unwrap();
+        assert_eq!(node.raw.get("FillColorToken").and_then(|v| v.as_str()), Some("Base"));
+        let alpha = node.raw.get("FillColorTokenAlpha").and_then(|v| v.as_f64()).expect("the role's alpha");
+        assert!((alpha - 0.3).abs() < 1e-6, "{alpha}");
+    }
+
     /// When a HIGHER-priority entry resolves token-only (entries-only
     /// palette), a stale RGBA written by an earlier pass for the same field
     /// must not shadow it at draw time: the medical close-button X kept its

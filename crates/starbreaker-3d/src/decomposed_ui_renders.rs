@@ -2,12 +2,15 @@
 //! file stem each identity is written under.
 //!
 //! - [`UiRenderKey`] / [`ui_render_key`]: what a binding's image depends on (its view fields, its texture aspect, its
-//!   owner's user variables, and the owner state the render pins).
+//!   owner's user variables, the owner state the render pins, and the button the cursor is on: [`ui_hover_key`]).
 //! - [`prerender_ui_bindings`]: renders every distinct default identity once, in parallel, plus the owner's other
 //!   states the canvas binds (one state type away from the default: `canvas_state_paths` × `UiBinding::state_types`)
 //!   and every pair of such states of two different bound types ([`bound_state_pairs`]; pairs the canvas cannot tell
 //!   apart share one render, [`render_class`]), and assigns each identity a file stem ([`UiRenders::stem`]).
+//!   Then each written render (the default, the states that differ: [`written_renders`]) with the cursor on each of its
+//!   buttons (the engine's hover tag on the node; [`UiRenders::hovers`]).
 //! - [`state_image_stem`] / [`states_image_stem`]: the file stem of a state render (a pair's stem names both).
+//!   [`hover_image_stem`]: a hover render's.
 //!
 //! Stems: the first identity with a given asset name (in binding order: children, then interior placements) keeps the
 //! plain name, so packages whose screens all have distinct names keep their paths; any other identity with that name
@@ -46,6 +49,8 @@ pub(super) struct UiRenderKey {
     state_types: String,
     /// The owner states pinned by the render (empty: the default render).
     states: Vec<(String, String)>,
+    /// The button node the cursor is on (`None`: at rest).
+    hovered: Option<String>,
 }
 
 /// Build the render-identity key for `binding` rendered with `states` pinned (see [`UiRenderKey`]).
@@ -65,7 +70,13 @@ pub(super) fn ui_render_key(binding: &UiBinding, states: &[(&str, &str)]) -> UiR
         user_variables: serde_json::to_string(&binding.user_variables).unwrap_or_default(),
         state_types: serde_json::to_string(&binding.state_types).unwrap_or_default(),
         states: states.iter().map(|(t, s)| (t.to_string(), s.to_string())).collect(),
+        hovered: None,
     }
+}
+
+/// The identity of `binding` rendered with `states` pinned and the cursor on button node `node`.
+pub(super) fn ui_hover_key(binding: &UiBinding, states: &[(&str, &str)], node: &str) -> UiRenderKey {
+    UiRenderKey { hovered: Some(node.to_string()), ..ui_render_key(binding, states) }
 }
 
 /// The pre-rendered screens of one export.
@@ -82,6 +93,9 @@ pub(super) struct UiRenders {
     aliases: HashMap<UiRenderKey, UiRenderKey>,
     /// Every identity's file stem (defaults and states, allocated in one namespace).
     stems: StemAllocator,
+    /// Per written render (its identity, an alias resolved): the identities of its renders with the cursor on each of
+    /// its buttons, by button node.
+    hovers: HashMap<UiRenderKey, Vec<(String, UiRenderKey)>>,
 }
 
 impl UiRenders {
@@ -98,6 +112,17 @@ impl UiRenders {
             .get(key)
             .cloned()
             .unwrap_or_else(|| format!("{}_{}", super::generated_ui_asset_name(binding), key_hash(key)))
+    }
+
+    /// The renders of identity `key` (default or state, through its alias) with the cursor on each of its buttons:
+    /// `(button node, the hover render's identity)`, in button order.
+    pub(super) fn hovers(&self, key: &UiRenderKey) -> &[(String, UiRenderKey)] {
+        self.hovers.get(self.aliases.get(key).unwrap_or(key)).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    /// The file stem allocated to a hover render's identity.
+    pub(super) fn hover_stem(&self, hover_key: &UiRenderKey) -> Option<&str> {
+        self.stems.by_key.get(hover_key).map(String::as_str)
     }
 
     /// The file stem of the state render `state_key` of a default stem `stem` pinning `states`: the allocated one, else
@@ -156,6 +181,49 @@ pub(super) fn state_image_stem(stem: &str, state_type: &str, state: &str) -> Str
 /// The file stem of `stem`'s render with every state of `states` pinned (one: [`state_image_stem`]).
 pub(super) fn states_image_stem(stem: &str, states: &[(String, String)]) -> String {
     states.iter().fold(stem.to_string(), |acc, (state_type, state)| state_image_stem(&acc, state_type, state))
+}
+
+/// The file stem of a render of `stem` (a default or state stem) with the cursor on button node `node`.
+pub(super) fn hover_image_stem(stem: &str, node: &str) -> String {
+    format!("{stem}__hover_{}", super::sanitize_identifier(node))
+}
+
+/// The renders a binding writes beside its default (as `generated_ui_binding_record` decides): each single-state
+/// render that differs from the default, then each pair render that differs from the default and from every single.
+/// `(identity, its pins)` with aliases resolved, in that order, the default first.
+fn written_renders(
+    out: &UiRenders,
+    key: &UiRenderKey,
+    binding: &UiBinding,
+) -> Vec<(UiRenderKey, Vec<(String, String)>)> {
+    let png = |k: &UiRenderKey| out.render(k).and_then(|r| r.as_ref().ok()).map(|r| &r.png);
+    let Some(default_png) = png(key) else { return Vec::new() };
+    let mut written = vec![(key.clone(), Vec::new())];
+    let mut singles = Vec::new();
+    for state in out.states.get(key).into_iter().flatten() {
+        let state_key = ui_render_key(binding, &[(state.0.as_str(), state.1.as_str())]);
+        if let Some(p) = png(&state_key) {
+            singles.push(p);
+            if p != default_png {
+                written.push((state_key, vec![state.clone()]));
+            }
+        }
+    }
+    for pair in out.pairs.get(key).into_iter().flatten() {
+        let pins: Vec<(&str, &str)> = pair.iter().map(|(t, s)| (t.as_str(), s.as_str())).collect();
+        let pair_key = ui_render_key(binding, &pins);
+        let resolved = out.aliases.get(&pair_key).cloned().unwrap_or(pair_key);
+        if written.iter().any(|(k, _)| *k == resolved) {
+            continue;
+        }
+        if let Some(p) = png(&resolved)
+            && p != default_png
+            && !singles.contains(&p)
+        {
+            written.push((resolved, pair.to_vec()));
+        }
+    }
+    written
 }
 
 /// The pairs of owner states the combined renders pin: one non-default state of each of two different state types the
@@ -254,13 +322,16 @@ pub(super) fn prerender_ui_bindings(
             out.states.insert(key.clone(), variants);
         }
     }
+    let hover_tag = crate::ui_pipeline::hover_tag_id(db);
     let render = |jobs: &[(UiRenderKey, &UiBinding, Vec<(String, String)>)]| -> Vec<_> {
         jobs.par_iter()
             .map(|(key, binding, states)| {
                 let pins: Vec<(&str, &str)> = states.iter().map(|(t, s)| (t.as_str(), s.as_str())).collect();
+                let hovered = key.hovered.as_deref().zip(hover_tag.as_deref());
                 let result = crate::ui_pipeline::render_ui_binding(
                     binding,
                     &pins,
+                    hovered,
                     db,
                     p4k,
                     texture_mip,
@@ -311,6 +382,35 @@ pub(super) fn prerender_ui_bindings(
         pair_jobs.len()
     );
     out.renders.extend(render(&pair_jobs));
+    // Then each written render with the cursor on each of its buttons (the engine's hover tag on that node).
+    if hover_tag.is_none() {
+        log::warn!("[ui] the tag database has no UI.Style.__Internal.hover tag: no hover renders");
+        return out;
+    }
+    let mut hover_jobs: Vec<(UiRenderKey, &UiBinding, Vec<(String, String)>)> = Vec::new();
+    for (key, binding) in &representatives {
+        for (written_key, pins) in written_renders(&out, key, binding) {
+            let Some(Ok(render)) = out.render(&written_key) else { continue };
+            let stem = out.stems.by_key.get(&written_key).cloned().unwrap_or_default();
+            let pin_refs: Vec<(&str, &str)> = pins.iter().map(|(t, s)| (t.as_str(), s.as_str())).collect();
+            let mut nodes: Vec<String> = Vec::new();
+            for button in &render.buttons {
+                if !nodes.contains(&button.node) {
+                    nodes.push(button.node.clone());
+                }
+            }
+            let mut hovers = Vec::new();
+            for node in nodes {
+                let hover_key = ui_hover_key(binding, &pin_refs, &node);
+                out.stems.assign(&hover_key, hover_image_stem(&stem, &node));
+                hovers.push((node, hover_key.clone()));
+                hover_jobs.push((hover_key, binding, pins.clone()));
+            }
+            out.hovers.insert(written_key, hovers);
+        }
+    }
+    log::info!("[ui] renders: {} hover", hover_jobs.len());
+    out.renders.extend(render(&hover_jobs));
     out
 }
 
@@ -369,6 +469,43 @@ mod tests {
         let pair = [("TypeA".to_string(), "A1".to_string()), ("TypeB".to_string(), "B1".to_string())];
         assert_eq!(states_image_stem("pad", &pair), "pad__typea_a1__typeb_b1");
         assert_ne!(ui_render_key(&binding, &[("TypeA", "A1"), ("TypeB", "B1")]), ui_render_key(&binding, &[("TypeA", "A1")]));
+    }
+
+    /// The cursor's button is part of the identity, and a hover render's stem names its button after its image's stem.
+    #[test]
+    fn hover_identities_name_their_button() {
+        let a = UiBinding { canvas_guid: Some("g".into()), ..Default::default() };
+        assert_ne!(ui_render_key(&a, &[]), ui_hover_key(&a, &[], "DoorButton"));
+        assert_ne!(ui_hover_key(&a, &[], "DoorButton"), ui_hover_key(&a, &[], "LockButton"));
+        assert_ne!(ui_hover_key(&a, &[], "DoorButton"), ui_hover_key(&a, &[("T", "S")], "DoorButton"));
+        assert_eq!(hover_image_stem("door__t_s", "DoorButton"), "door__t_s__hover_doorbutton");
+    }
+
+    /// The renders a binding writes beside its default, which get hover renders: the single states that differ from the
+    /// default, and the pairs that differ from the default and from every single.
+    #[test]
+    fn written_renders_skip_states_that_look_like_the_default_or_a_single() {
+        let ty = |name: &str, states: &[&str]| UiStateType {
+            name: name.into(),
+            states: states.iter().map(|s| s.to_string()).collect(),
+            default_state: states[0].into(),
+            ..Default::default()
+        };
+        let binding = UiBinding { canvas_guid: Some("g".into()), state_types: vec![ty("A", &["A0", "A1", "A2"]), ty("B", &["B0", "B1"])], ..Default::default() };
+        let render = |png: u8| Ok(crate::ui_pipeline::UiRender { png: vec![png], size_px: [1, 1], buttons: Vec::new() });
+        let key = ui_render_key(&binding, &[]);
+        let mut out = UiRenders::default();
+        out.renders.insert(key.clone(), render(0));
+        out.renders.insert(ui_render_key(&binding, &[("A", "A1")]), render(1));
+        out.renders.insert(ui_render_key(&binding, &[("A", "A2")]), render(0)); // looks like the default
+        out.renders.insert(ui_render_key(&binding, &[("B", "B1")]), render(2));
+        out.renders.insert(ui_render_key(&binding, &[("A", "A1"), ("B", "B1")]), render(3));
+        out.renders.insert(ui_render_key(&binding, &[("A", "A2"), ("B", "B1")]), render(2)); // looks like B1 alone
+        let pin = |t: &str, s: &str| (t.to_string(), s.to_string());
+        out.states.insert(key.clone(), vec![pin("A", "A1"), pin("A", "A2"), pin("B", "B1")]);
+        out.pairs.insert(key.clone(), vec![[pin("A", "A1"), pin("B", "B1")], [pin("A", "A2"), pin("B", "B1")]]);
+        let written: Vec<Vec<(String, String)>> = written_renders(&out, &key, &binding).into_iter().map(|(_, pins)| pins).collect();
+        assert_eq!(written, [vec![], vec![pin("A", "A1")], vec![pin("B", "B1")], vec![pin("A", "A1"), pin("B", "B1")]]);
     }
 
     /// Identities differ by texture aspect, user variables and state; the state stem names its state.

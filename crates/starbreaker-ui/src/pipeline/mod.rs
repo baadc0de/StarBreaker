@@ -256,6 +256,10 @@ pub struct UiBindingView<'a> {
     /// the state of its interaction state machine (`state.<type>.<state>`
     /// booleans; one render per state). Empty: the shared registry as is.
     pub binding_values: &'a [(String, crate::canvas::Value)],
+    /// Render as the player sees the screen with the cursor on one of its widgets: `(node name, hover tag id)`, the
+    /// tag being the engine's `UI.Style.__Internal.hover` (resolved by the caller from the TagDatabase). The node's
+    /// hover-gated styles apply (a large button's background in the brand's `Selected` colour). `None`: at rest.
+    pub hovered: Option<(&'a str, &'a str)>,
 }
 
 /// All inputs required by pipeline entrypoints.
@@ -325,10 +329,13 @@ fn binding_overlay_registry(
         .transit_location_loc_key
         .map(str::trim)
         .filter(|key| !key.is_empty());
-    if transit_key.is_none() && binding.binding_values.is_empty() {
+    if transit_key.is_none() && binding.binding_values.is_empty() && binding.hovered.is_none() {
         return None;
     }
     let mut overlay = defaults.clone();
+    if let Some((node, tag)) = binding.hovered {
+        overlay.set_hovered(node, tag);
+    }
     if let Some(key) = transit_key {
         let localized = defaults
             .lookup_localization(key)

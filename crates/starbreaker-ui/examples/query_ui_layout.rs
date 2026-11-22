@@ -310,6 +310,7 @@ fn main() -> Result<(), String> {
         screen_aspect_w_over_h: None,
         texture_aspect_w_over_h: None,
         binding_values: &[],
+        hovered: None,
     };
 
     let inputs = PipelineInputs {

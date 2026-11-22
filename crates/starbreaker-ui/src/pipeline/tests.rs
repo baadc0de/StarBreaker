@@ -49,6 +49,7 @@ fn binding_overlay_registry_pins_localized_floor_name() {
         screen_aspect_w_over_h: None,
         texture_aspect_w_over_h: None,
         binding_values: &[],
+        hovered: None,
     };
     let overlay = binding_overlay_registry(&binding, &defaults)
         .expect("transit binding must produce an overlay");
@@ -100,6 +101,7 @@ fn binding_overlay_registry_pins_the_owners_values() {
         screen_aspect_w_over_h: None,
         texture_aspect_w_over_h: None,
         binding_values: &values,
+        hovered: None,
     };
     let overlay = binding_overlay_registry(&binding, &defaults).expect("values make an overlay");
     assert_eq!(overlay.lookup_path("test_hidesomething"), Some(&crate::canvas::Value::Bool(true)));

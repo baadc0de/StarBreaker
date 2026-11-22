@@ -1876,6 +1876,7 @@ mod tests {
             user_variables: Vec::new(),
             state_types: Vec::new(),
             state_images: Vec::new(),
+            hover_images: Vec::new(),
             image_size_px: None,
             buttons: Vec::new(),
         }

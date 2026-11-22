@@ -1531,7 +1531,10 @@ fn build_ui_ir_nodes(
                 && svg_fill_overlay_colour_from_raw(&node.raw).is_none()
                 && fill_colour_from_raw_for_text(&node.raw).is_none()
         });
-        let svg_fill_overlay_alpha = svg_fill_overlay_alpha_from_raw(&node.raw).or(own_overlay.as_ref().map(|o| o.2));
+        // A style's role fill stands over the authored overlay colours, its alpha included.
+        let svg_fill_overlay_alpha = styled_role_fill_alpha(node)
+            .or_else(|| svg_fill_overlay_alpha_from_raw(&node.raw))
+            .or(own_overlay.as_ref().map(|o| o.2));
         let alpha = alpha_base
             * separator_style
                 .as_ref()

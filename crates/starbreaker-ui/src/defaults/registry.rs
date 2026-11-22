@@ -30,6 +30,9 @@ pub struct DefaultValueRegistry {
     /// `UserVariablesComponentParams`, defaults and instance overrides). A bare-named variable the owner does not
     /// declare then reads at its type's default instead of as an unknown runtime value.
     owner_user_variables_known: bool,
+    /// The widget under the player's cursor and the tag the engine marks it with (`UI.Style.__Internal.hover`, resolved
+    /// by the caller from the TagDatabase): `(node name, tag id)`. `None`: nothing is hovered (the at-rest render).
+    hovered: Option<(String, String)>,
 }
 
 impl DefaultValueRegistry {
@@ -87,6 +90,17 @@ impl DefaultValueRegistry {
     /// a user variable.
     pub fn owner_user_variable_known(&self, binding: &str) -> bool {
         self.lookup_path(binding).is_some() || (self.owner_user_variables_known && !binding.contains('.') && !binding.contains('/'))
+    }
+
+    /// Render as if the cursor were on the node named `node`: it carries `tag_id` (the engine's hover tag), so the
+    /// style entries gated on that tag (a large button's `Root*Hover` entries) apply to it and its subtree.
+    pub fn set_hovered(&mut self, node: &str, tag_id: &str) {
+        self.hovered = Some((node.to_string(), tag_id.to_string()));
+    }
+
+    /// The hovered node's name and its hover tag id ([`Self::set_hovered`]).
+    pub fn hovered(&self) -> Option<(&str, &str)> {
+        self.hovered.as_ref().map(|(node, tag)| (node.as_str(), tag.as_str()))
     }
 
     /// Insert or overwrite a binding-path default.

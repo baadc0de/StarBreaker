@@ -118,6 +118,7 @@ fn compile_ir_for_binding_uses_content_canvas_guid() {
         screen_aspect_w_over_h: None,
         texture_aspect_w_over_h: None,
         binding_values: &[],
+        hovered: None,
     };
 
     let inputs = PipelineInputs {
@@ -190,6 +191,7 @@ fn compile_ir_for_binding_matches_golden_fixture() {
         screen_aspect_w_over_h: None,
         texture_aspect_w_over_h: None,
         binding_values: &[],
+        hovered: None,
     };
 
     let inputs = PipelineInputs {
@@ -263,6 +265,7 @@ fn render_for_binding_ir_produces_nonempty_png() {
         screen_aspect_w_over_h: None,
         texture_aspect_w_over_h: None,
         binding_values: &[],
+        hovered: None,
     };
 
     let inputs = PipelineInputs {
@@ -345,6 +348,7 @@ fn render_for_binding_matches_ir_entrypoint_for_bb_canvas() {
         screen_aspect_w_over_h: None,
         texture_aspect_w_over_h: None,
         binding_values: &[],
+        hovered: None,
     };
 
     let inputs = PipelineInputs {
@@ -436,6 +440,7 @@ fn render_for_binding_ir_honours_canvas_style_override() {
         screen_aspect_w_over_h: None,
         texture_aspect_w_over_h: None,
         binding_values: &[],
+        hovered: None,
     };
 
     let inputs = PipelineInputs {

@@ -71,3 +71,28 @@ fn a_styled_literal_fill_replaces_the_own_colour() {
     let node = compile(shape);
     assert!((node.alpha - 1.0).abs() < 1e-4, "the literal fill's alpha, not the own 0.2: {}", node.alpha);
 }
+
+/// A styled ROLE fill (the cascade writes `FillColorToken` beside the resolved `FillColor`, its alpha the style's)
+/// tints with that role at that alpha: a modular-kit large button's background is `Base` at 0.3 at rest and 0.6 under
+/// the cursor (`RootBackgroundElementInstance` / `...Hover`), not the role at full strength.
+#[test]
+fn a_styled_role_fill_tints_at_the_styles_alpha() {
+    let mut shape = door_status_shape(serde_json::Value::Null);
+    shape["FillColorToken"] = serde_json::json!("Base");
+    shape["FillColor"] = serde_json::json!({"r": 0.1, "g": 0.4, "b": 0.8, "a": 0.3});
+    let node = compile(shape);
+    assert_eq!(node.icon_tint_colour_token.as_deref(), Some("Base"));
+    assert!((node.alpha - 0.3).abs() < 1e-4, "the styled fill's alpha: {}", node.alpha);
+}
+
+/// The token-only form (an entries-only kit sheet could not resolve the RGBA at style time): the role's alpha is
+/// `FillColorTokenAlpha`.
+#[test]
+fn a_token_only_styled_role_fill_tints_at_the_recorded_alpha() {
+    let mut shape = door_status_shape(serde_json::Value::Null);
+    shape["FillColorToken"] = serde_json::json!("Base");
+    shape["FillColorTokenAlpha"] = serde_json::json!(0.6);
+    let node = compile(shape);
+    assert_eq!(node.icon_tint_colour_token.as_deref(), Some("Base"));
+    assert!((node.alpha - 0.6).abs() < 1e-4, "the recorded alpha: {}", node.alpha);
+}

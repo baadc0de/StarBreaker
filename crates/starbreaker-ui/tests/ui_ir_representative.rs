@@ -122,6 +122,7 @@ fn compile_ir_for_representative_fixtures_validates() {
         screen_aspect_w_over_h: None,
         texture_aspect_w_over_h: None,
         binding_values: &[],
+        hovered: None,
         };
 
         let inputs = PipelineInputs {
@@ -170,6 +171,7 @@ fn stable_hash_is_repeatable_for_representative_fixture() {
         screen_aspect_w_over_h: None,
         texture_aspect_w_over_h: None,
         binding_values: &[],
+        hovered: None,
     };
 
     let inputs = PipelineInputs {

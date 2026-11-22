@@ -115,6 +115,7 @@ pub fn render_ui_binding_png(
     render_ui_binding(
         binding,
         state.as_slice(),
+        None,
         db,
         p4k,
         texture_mip,
@@ -137,12 +138,21 @@ pub struct UiRender {
     pub buttons: Vec<crate::types::UiButton>,
 }
 
+/// The engine's hover style tag (`UI.Style.__Internal.hover`), which it puts on the widget under the cursor and which
+/// the widget standards' `*Hover` style entries test; by name from the tag database. `None` when the database has no
+/// such tag.
+pub fn hover_tag_id(db: &Database<'_>) -> Option<String> {
+    db.tag_id("/UI/Style/__Internal/hover").map(|id| id.to_string())
+}
+
 /// Render `binding` with the owner `states` pinned (every other state type at its default; none: the default render)
-/// to a [`UiRender`]. See [`render_ui_binding_png`].
+/// to a [`UiRender`]. See [`render_ui_binding_png`]. `hovered` renders it with the cursor on a widget:
+/// `(node name, hover tag id)` (see [`hover_tag_id`]).
 #[allow(clippy::too_many_arguments)]
 pub fn render_ui_binding(
     binding: &UiBinding,
     states: &[(&str, &str)],
+    hovered: Option<(&str, &str)>,
     db: &Database<'_>,
     p4k: &MappedP4k,
     texture_mip: u32,
@@ -175,6 +185,7 @@ pub fn render_ui_binding(
         screen_aspect_w_over_h: binding.ui_screen_aspect_w_over_h,
         texture_aspect_w_over_h: binding.ui_texture_aspect_w_over_h,
         binding_values: &binding_values,
+        hovered,
     };
     let effective_guid = binding
         .content_canvas_guid
@@ -260,6 +271,7 @@ pub fn render_ui_binding(
 pub fn compile_ui_binding_ir_json(
     binding: &UiBinding,
     states: &[(&str, &str)],
+    hovered: Option<(&str, &str)>,
     db: &Database<'_>,
     p4k: &MappedP4k,
     texture_mip: u32,
@@ -283,6 +295,7 @@ pub fn compile_ui_binding_ir_json(
         screen_aspect_w_over_h: binding.ui_screen_aspect_w_over_h,
         texture_aspect_w_over_h: binding.ui_texture_aspect_w_over_h,
         binding_values: &binding_values,
+        hovered,
     };
     let effective_guid = binding
         .content_canvas_guid

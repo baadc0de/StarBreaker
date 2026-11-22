@@ -714,6 +714,7 @@ fn ui_binding_for_record_base(db: &Database, record: &Record) -> Option<UiBindin
                 user_variables: Vec::new(),
                 state_types: Vec::new(),
                 state_images: Vec::new(),
+                hover_images: Vec::new(),
                 image_size_px: None,
                 buttons: Vec::new(),
             });
@@ -776,6 +777,7 @@ fn ui_binding_for_record_base(db: &Database, record: &Record) -> Option<UiBindin
                 user_variables: Vec::new(),
                 state_types: Vec::new(),
                 state_images: Vec::new(),
+                hover_images: Vec::new(),
                 image_size_px: None,
                 buttons: Vec::new(),
             });
@@ -935,6 +937,7 @@ fn ui_binding_for_record_base(db: &Database, record: &Record) -> Option<UiBindin
         user_variables: Vec::new(),
         state_types: Vec::new(),
         state_images: Vec::new(),
+        hover_images: Vec::new(),
         image_size_px: None,
         buttons: Vec::new(),
     })

@@ -847,6 +847,13 @@ impl<'a> Database<'a> {
         self.tag_paths.get_or_init(|| crate::tag_paths::tag_paths(self)).get(id).map(String::as_str)
     }
 
+    /// The id of the `Tag` record whose full name is `path` (the inverse of [`Self::tag_path`]); `None` when no tag has
+    /// that name. A linear scan: for the few tags a consumer names (an engine-internal style tag).
+    pub fn tag_id(&self, path: &str) -> Option<CigGuid> {
+        let paths = self.tag_paths.get_or_init(|| crate::tag_paths::tag_paths(self));
+        paths.iter().find(|(_, p)| p.as_str() == path).map(|(id, _)| *id)
+    }
+
     /// Check if a record is a "main" record (last record with its file_name_offset).
     pub fn is_main_record(&self, record: &Record) -> bool {
         self.main_record_ids.contains(&record.id)

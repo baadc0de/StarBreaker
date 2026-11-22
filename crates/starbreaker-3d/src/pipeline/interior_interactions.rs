@@ -77,6 +77,8 @@ pub(crate) struct ClassFacts {
     pub item_port_links: Vec<ItemPortLink>,
     /// Shared interactions with `Sendable`, with their linking tags.
     pub sendable_interactions: Vec<SendableInteraction>,
+    /// The shared interactions that start a use of the class's usable (`SActorUsableParams`).
+    pub usable_interactions: Vec<String>,
     /// `SLightGroupComponentParams`: the class is a light group.
     pub light_group: Option<LightGroupFacts>,
     /// The class has an interaction state machine (`SInteractionStateMachineParams`).
@@ -281,6 +283,7 @@ fn class_facts(db: &Database, record: &Record) -> ClassFacts {
             let graph = super::interaction_graph::RecordGraph::new(&json);
             let tag = |t: &serde_json::Value| super::interaction_graph::tag_name(db, t);
             facts.sendable_interactions = super::interaction_graph::sendable_interactions(&graph, &tag);
+            facts.usable_interactions = super::interaction_graph::usable_interactions(&graph);
             facts.state_machine = graph.component("SInteractionStateMachineParams").is_some();
             facts.proximity_sensor = graph.component("SCItemProximitySensorParams").is_some();
             light_group |= graph.component("SLightGroupComponentParams").is_some();

@@ -2663,6 +2663,7 @@ fn interior_container_json(container: &InteriorContainerRecord) -> serde_json::V
                 "interaction_points": placement.identity.interaction_points,
                 "item_port_links": placement.identity.item_port_links,
                 "sendable_interactions": placement.identity.sendable_interactions,
+                "usable_interactions": placement.identity.usable_interactions,
                 "ui_bindings": placement.ui_bindings.iter().map(ui_binding_json).collect::<Vec<_>>(),
                 "transform": placement.transform,
                 "palette_id": placement.palette_id,
@@ -2715,6 +2716,7 @@ fn ui_binding_json(binding: &UiBinding) -> serde_json::Value {
         "user_variables": binding.user_variables,
         "state_types": binding.state_types,
         "state_images": binding.state_images,
+        "hover_images": binding.hover_images,
         "image_size_px": binding.image_size_px,
         "buttons": binding.buttons,
     })
@@ -3557,6 +3559,7 @@ fn generated_ui_binding_record(
         None => crate::ui_pipeline::render_ui_binding(
             &binding,
             &[],
+            None,
             db,
             p4k,
             texture_mip,
@@ -3620,6 +3623,40 @@ fn generated_ui_binding_record(
                         label()
                     ),
                     None => {}
+                }
+            }
+            // The renders with the cursor on each button of the default and of each state image written (a hover that
+            // changes nothing on that image is not written).
+            let mut written: Vec<(Vec<(String, String)>, UiRenderKey)> = vec![(Vec::new(), key.clone())];
+            for image in &binding.state_images {
+                let pins: Vec<(String, String)> = image.states.iter().map(|p| (p.state_type.clone(), p.state.clone())).collect();
+                let pin_refs: Vec<(&str, &str)> = pins.iter().map(|(t, s)| (t.as_str(), s.as_str())).collect();
+                written.push((pins.clone(), ui_render_key(&binding, &pin_refs)));
+            }
+            for (pins, state_key) in written {
+                let Some(Ok(base)) = render_cache.render(&state_key) else { continue };
+                for (node, hover_key) in render_cache.hovers(&state_key) {
+                    match render_cache.render(hover_key) {
+                        Some(Ok(hover)) if hover.png != base.png => {
+                            let Some(stem) = render_cache.hover_stem(hover_key) else { continue };
+                            let path =
+                                generated_ui_binding_path_for_stem(root_entity_name, root_geometry_path, root_manufacturer_id, stem);
+                            file_record.push((path.clone(), hover.png.clone()));
+                            binding.hover_images.push(crate::types::UiHoverImage {
+                                node: node.clone(),
+                                states: pins
+                                    .iter()
+                                    .map(|(t, s)| crate::types::UiStatePin { state_type: t.clone(), state: s.clone() })
+                                    .collect(),
+                                generated_image_path: path,
+                            });
+                        }
+                        Some(Err(e)) => log::warn!(
+                            "ui render failed for {:?} with the cursor on {node}: {e}",
+                            binding.helper_name.as_deref().unwrap_or(&binding.source_entity_name)
+                        ),
+                        _ => {}
+                    }
                 }
             }
             file_record.insert(0, (export_path.clone(), png_bytes));
@@ -3818,7 +3855,7 @@ fn lift_panel_styles(
         compiled
             .entry(binding as *const UiBinding)
             .or_insert_with(|| {
-                match crate::ui_pipeline::compile_ui_binding_ir_json(binding, &[], db, p4k, texture_mip, root_manufacturer_id, loc_data, ship_data)
+                match crate::ui_pipeline::compile_ui_binding_ir_json(binding, &[], None, db, p4k, texture_mip, root_manufacturer_id, loc_data, ship_data)
                     .map_err(|e| log::warn!("lift panel style: door pad IR failed: {e}"))
                     .ok()
                     .and_then(|ir| serde_json::from_str::<serde_json::Value>(&ir).ok())
@@ -4115,6 +4152,7 @@ mod manufacturer_id_tests {
             user_variables: Vec::new(),
             state_types: Vec::new(),
             state_images: Vec::new(),
+            hover_images: Vec::new(),
             image_size_px: None,
             buttons: Vec::new(),
         };
@@ -9091,4 +9129,4 @@ mod texture_container_tests;
 
 #[path = "decomposed_ui_renders.rs"]
 mod ui_renders;
-use ui_renders::{UiRenders, prerender_ui_bindings, ui_render_key};
+use ui_renders::{UiRenderKey, UiRenders, prerender_ui_bindings, ui_render_key};

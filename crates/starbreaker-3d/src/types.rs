@@ -883,6 +883,10 @@ pub struct UiBinding {
     /// states the canvas binds and whose image differs from the default render; then the renders of pairs of such
     /// states of two different bound types whose image differs from the default and from every single-state image.
     pub state_images: Vec<UiStateImage>,
+    /// Renders with the cursor on one of the screen's buttons (the engine's hover tag on that node, so its standard's
+    /// `*Hover` styles apply): one per button of the default render and of each state image, written only when it
+    /// differs from the image without the cursor. What the player sees when aiming at that button.
+    pub hover_images: Vec<UiHoverImage>,
     /// Pixel size `[width, height]` of the generated images (`generated_image_path`, `state_images`): the space of
     /// `buttons[].rect_px`. `None` when no image was generated.
     pub image_size_px: Option<[u32; 2]>,
@@ -979,6 +983,16 @@ pub struct UiStateImage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state: Option<String>,
     /// Every state the render pins (the others are at their type's default), in state-type order.
+    #[serde(default)]
+    pub states: Vec<UiStatePin>,
+    pub generated_image_path: String,
+}
+
+/// A render with the cursor on a button (`ui_bindings[].hover_images[]`): the button's node (`buttons[].node`) and the
+/// owner states the render pins (empty: the default render's states), as in `state_images[]`.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct UiHoverImage {
+    pub node: String,
     #[serde(default)]
     pub states: Vec<UiStatePin>,
     pub generated_image_path: String,
@@ -1443,6 +1457,8 @@ pub struct PlacementIdentity {
     pub item_port_links: Vec<ItemPortLink>,
     /// The class's sendable shared interactions.
     pub sendable_interactions: Vec<SendableInteraction>,
+    /// The class's shared interactions that start a use of its usable (`SActorUsableParams` use channels).
+    pub usable_interactions: Vec<String>,
 }
 
 /// `SCItemDoorParams` of a door entity, its timing and state: the class values

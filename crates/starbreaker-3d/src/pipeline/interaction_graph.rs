@@ -11,6 +11,7 @@
 //!   the state machine (`SInteractionStateMachineParams`: transitions, then `AggregateStateModifier`s) and
 //!   `SLightGroupComponentParams.lightStateOverrides`.
 //! - [`state_type_rules`]: a state type's interaction transitions and linked-state tag rules (UI `state_types[]`).
+//! - [`usable_interactions`]: the shared interactions that start a use of the entity's usable (`SActorUsableParams`).
 //!
 //! Tags are named by [`starbreaker_datacore::Database::tag_path`]. Nothing here consults a class, interaction or
 //! state name: the graph is followed as authored.
@@ -132,6 +133,24 @@ impl<'j> RecordGraph<'j> {
 
 fn flag(value: &Value, name: &str) -> bool {
     value.get(name).and_then(Value::as_bool).unwrap_or(false)
+}
+
+/// The shared interactions that start a use of the class's usable: each `SActorUsableParams.useSlots[]`
+/// `useChannelInstances[].interaction` (a bed's Sit, LieDown, Sleep, SitUp), distinct, in authored order. The other
+/// interactions at the usable's points (a bed's Exit, SaveGameLogOut) act on a use in progress. Empty without a usable.
+pub(crate) fn usable_interactions(graph: &RecordGraph) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let slots = graph.component("SActorUsableParams").and_then(|c| c.get("useSlots")).and_then(Value::as_array);
+    for slot in slots.into_iter().flatten() {
+        for channel in slot.get("useChannelInstances").and_then(Value::as_array).into_iter().flatten() {
+            if let Some(name) = graph.interaction_name(channel.get("interaction"))
+                && !out.contains(&name)
+            {
+                out.push(name);
+            }
+        }
+    }
+    out
 }
 
 /// The class's sendable shared interactions with their linking tags, in authored order.
@@ -356,6 +375,23 @@ mod tests {
         assert_eq!(interactions[0].linking_tag.as_deref(), Some("/T/aa"));
         assert_eq!(interactions[0].light_state.as_deref(), Some("Lit"), "a conjunction not met does not apply");
         assert_eq!(interactions[1].light_state, None, "no transition: no light state");
+    }
+
+    /// A usable's use channels name the interactions that start a use (synthetic record: two slots, a repeated
+    /// interaction, a channel without one); an interaction no channel names (`Leave`) is not one.
+    #[test]
+    fn usable_interactions_are_the_use_channels_interactions() {
+        let json = json!({"_RecordValue_": {"Components": [
+            {"_Type_": "SEntityInteractableParams", "Interactable": {"SharedInteractions": [
+                {"_Pointer_": "ptr:1", "Name": "Rest"}, {"_Pointer_": "ptr:2", "Name": "Perch"}, {"_Pointer_": "ptr:3", "Name": "Leave"}
+            ]}},
+            {"_Type_": "SActorUsableParams", "useSlots": [
+                {"useChannelInstances": [{"interaction": "_PointsTo_:ptr:1"}, {"interaction": null}, {"interaction": "_PointsTo_:ptr:2"}]},
+                {"useChannelInstances": [{"interaction": "_PointsTo_:ptr:1"}]}
+            ]}
+        ]}});
+        assert_eq!(usable_interactions(&RecordGraph::new(&json)), ["Rest", "Perch"]);
+        assert!(usable_interactions(&RecordGraph::new(&record())).is_empty(), "no usable");
     }
 
     #[test]

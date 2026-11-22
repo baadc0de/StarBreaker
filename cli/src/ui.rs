@@ -48,6 +48,11 @@ pub enum UiCommand {
         /// Path to Data.p4k (default: SC_DATA_P4K env var or auto-discover).
         #[arg(long)]
         p4k: Option<PathBuf>,
+
+        /// Also render the default and each state with the cursor on this button node (`buttons[].node`), as the
+        /// export renders its `hover_images`.
+        #[arg(long)]
+        hover: Option<String>,
     },
     /// Render a single MFD SWF file.
     ///
@@ -59,8 +64,8 @@ pub enum UiCommand {
 impl UiCommand {
     pub fn run(self) -> Result<()> {
         match self {
-            UiCommand::Render { scene, out_dir, mip, helper, dump_ir_dir, p4k } => {
-                run_render(&scene, out_dir.as_deref(), dump_ir_dir.as_deref(), mip, helper.as_deref(), p4k.as_deref().map(|p| p.as_ref()))
+            UiCommand::Render { scene, out_dir, mip, helper, dump_ir_dir, p4k, hover } => {
+                run_render(&scene, out_dir.as_deref(), dump_ir_dir.as_deref(), mip, helper.as_deref(), p4k.as_deref().map(|p| p.as_ref()), hover.as_deref())
             }
             UiCommand::Mfd => Err(CliError::MissingRequirement(
                 "starbreaker ui mfd: removed in UI Plan 2. MFD content is now \
@@ -78,6 +83,7 @@ fn run_render(
     texture_mip: u32,
     helper_filter: Option<&str>,
     p4k_path: Option<&std::path::Path>,
+    hover: Option<&str>,
 ) -> Result<()> {
     // Load P4K and DataCore.
     let (p4k_opt, dcb_bytes) = load_dcb_bytes(p4k_path, None)?;
@@ -128,6 +134,7 @@ fn run_render(
         Some(name) => starbreaker_3d::ui_pipeline::UiShipData::derive(&db, name),
         None => starbreaker_3d::ui_pipeline::UiShipData::none(),
     };
+    let hover_tag = starbreaker_3d::ui_pipeline::hover_tag_id(&db);
     let mut rendered = 0usize;
     let mut failed = 0usize;
 
@@ -142,16 +149,40 @@ fn run_render(
             continue;
         }
 
-        // The default render, then the owner states the export rendered (`state_images`: one state or a pair), as the
+        // The default render, then the owner states the export rendered (`state_images`: one state or a pair), then the
+        // renders with the cursor on a button (`hover_images`, and `--hover` on the default and each state), as the
         // export renders them.
         let states: Vec<Vec<(&str, &str)>> = std::iter::once(Vec::new())
             .chain(binding.state_images.iter().map(state_image_pins))
             .collect();
-        for state in states {
-        match starbreaker_3d::ui_pipeline::render_ui_binding(&binding, &state, &db, &p4k, texture_mip, manufacturer_id.as_deref(), &loc_data, &ship_data, None, root_entity_name.as_deref()) {
+        let mut renders: Vec<(Vec<(&str, &str)>, Option<&str>)> = states.iter().map(|s| (s.clone(), None)).collect();
+        renders.extend(binding.hover_images.iter().map(|h| {
+            (h.states.iter().map(|p| (p.state_type.as_str(), p.state.as_str())).collect(), Some(h.node.as_str()))
+        }));
+        if let Some(node) = hover {
+            renders.extend(states.iter().map(|s| (s.clone(), Some(node))));
+        }
+        for (state, hovered) in renders {
+        let hovered = match (hovered, hover_tag.as_deref()) {
+            (Some(node), Some(tag)) => Some((node, tag)),
+            (Some(node), None) => {
+                eprintln!("  skip   {:?} with the cursor on {node}: the tag database has no hover tag", binding.helper_name);
+                continue;
+            }
+            (None, _) => None,
+        };
+        match starbreaker_3d::ui_pipeline::render_ui_binding(&binding, &state, hovered, &db, &p4k, texture_mip, manufacturer_id.as_deref(), &loc_data, &ship_data, None, root_entity_name.as_deref()) {
             Ok(render) => {
                 let png_bytes = render.png;
-                let file_name = png_name_for_binding(binding, &state, texture_mip);
+                let plain = png_name_for_binding(binding, &state, texture_mip);
+                let file_name = match hovered {
+                    Some((node, _)) => format!(
+                        "{}__hover_{}.png",
+                        plain.trim_end_matches(".png"),
+                        node.replace(|c: char| !c.is_ascii_alphanumeric(), "_")
+                    ),
+                    None => plain,
+                };
                 let dest = out_dir.join(&file_name);
                 std::fs::write(&dest, &png_bytes)?;
                 eprintln!("  wrote  {}", dest.display());
@@ -159,6 +190,7 @@ fn run_render(
                     let ir_json = starbreaker_3d::ui_pipeline::compile_ui_binding_ir_json(
                         binding,
                         &state,
+                        hovered,
                         &db,
                         &p4k,
                         texture_mip,
@@ -290,6 +322,7 @@ fn parse_ui_binding(v: &Value) -> Option<UiBinding> {
             .get("source_kiosk_interaction")
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
+        interaction_distance: obj.get("interaction_distance").and_then(|v| v.as_f64()).map(|n| n as f32),
         ui_texture_aspect_w_over_h: obj
             .get("ui_texture_aspect_w_over_h")
             .and_then(|v| v.as_f64())
@@ -297,6 +330,7 @@ fn parse_ui_binding(v: &Value) -> Option<UiBinding> {
         user_variables: obj.get("user_variables").cloned().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default(),
         state_types: obj.get("state_types").cloned().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default(),
         state_images: obj.get("state_images").cloned().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default(),
+        hover_images: obj.get("hover_images").cloned().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default(),
         image_size_px: obj.get("image_size_px").cloned().and_then(|v| serde_json::from_value(v).ok()),
         buttons: obj.get("buttons").cloned().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default(),
     })

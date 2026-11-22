@@ -280,6 +280,7 @@ fn render_target(
         screen_aspect_w_over_h: None,
         texture_aspect_w_over_h: None,
         binding_values: &[],
+        hovered: None,
     };
 
     let inputs = PipelineInputs {
@@ -465,6 +466,7 @@ fn main() -> Result<(), String> {
         screen_aspect_w_over_h: None,
         texture_aspect_w_over_h: None,
         binding_values: &[],
+        hovered: None,
         };
         let ui_target_a_inputs = PipelineInputs {
             binding: &ui_target_a_binding,
@@ -496,6 +498,7 @@ fn main() -> Result<(), String> {
         screen_aspect_w_over_h: None,
         texture_aspect_w_over_h: None,
         binding_values: &[],
+        hovered: None,
         };
         let ui_target_b_inputs = PipelineInputs {
             binding: &ui_target_b_binding,

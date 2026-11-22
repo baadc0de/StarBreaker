@@ -700,6 +700,30 @@ pub(crate) fn custom_shape_own_overlay(node: &crate::bb_scene::BbNode) -> Option
     (token.is_some() || rgba.is_some()).then_some((token, rgba.map(|c| [c[0], c[1], c[2], 1.0]), alpha))
 }
 
+/// The alpha of a `WidgetCustomShape`'s overlay colour set by a style as a ROLE (the cascade writes `FillColorToken`
+/// and the style's alpha as `FillColorTokenAlpha`; without it, the resolved `FillColor`'s `a`): the shape tints with that role at that alpha (a
+/// modular-kit large button's background, `Base` at 0.3; at 0.6 under the cursor). `None` without a styled role fill
+/// or with the overlay off.
+pub(crate) fn styled_role_fill_alpha(node: &crate::bb_scene::BbNode) -> Option<f32> {
+    if !matches!(node.ty, crate::bb_scene::BbNodeType::WidgetCustomShape) {
+        return None;
+    }
+    let flag = |v: Option<&serde_json::Value>| v.and_then(|v| v.as_bool());
+    let overlay = flag(node.raw.get("EnableColorOverlay"))
+        .or_else(|| flag(node.raw.get("enableColorOverlay")))
+        .or_else(|| flag(node.raw.get("svgFill").and_then(|s| s.get("enableColorOverlay"))))
+        .unwrap_or(false);
+    let token = node.raw.get("FillColorToken").and_then(|v| v.as_str()).map(str::trim).filter(|t| !t.is_empty());
+    if !overlay || token.is_none() {
+        return None;
+    }
+    node.raw
+        .get("FillColorTokenAlpha")
+        .and_then(|a| a.as_f64())
+        .or_else(|| node.raw.get("FillColor")?.get("a")?.as_f64())
+        .map(|a| (a as f32).clamp(0.0, 1.0))
+}
+
 pub(crate) fn svg_fill_overlay_colour_from_raw(raw: &serde_json::Value) -> Option<[f32; 4]> {
     let svg_fill = raw.get("svgFill")?;
     let render_shape = svg_fill
