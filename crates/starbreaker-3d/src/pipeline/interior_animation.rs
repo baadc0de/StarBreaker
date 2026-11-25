@@ -47,6 +47,40 @@ fn placeholder_record() -> Record {
     }
 }
 
+/// The Mannequin controller of the entity class `guid` names (`None` without one).
+fn class_animation_controller(db: &Database, guid: &str) -> Option<crate::animation::AnimationControllerSource> {
+    let guid = <starbreaker_common::CigGuid as std::str::FromStr>::from_str(guid).ok()?;
+    let record = db.record_by_id(&guid)?;
+    super::query_animation_controller_source(db, record).filter(|source| !source.animation_database.is_empty())
+}
+
+/// Within each group of equal names, names whose controllers differ get the
+/// controller's database and controller file stems appended (`<name>__<adb>_<controller>`;
+/// `<name>__none` without one); a group with one controller keeps its name.
+fn namespace_by_controller(names: &mut [String], controllers: &[Option<crate::animation::AnimationControllerSource>]) {
+    let key = |c: &Option<crate::animation::AnimationControllerSource>| {
+        c.as_ref().map(|c| (c.animation_database.clone(), c.animation_controller.clone()))
+    };
+    let stem = |path: &str| {
+        let base = path.rsplit(['/', '\\']).next().unwrap_or(path);
+        base.rsplit_once('.').map_or(base, |(s, _)| s).to_string()
+    };
+    let mut distinct: std::collections::HashMap<String, std::collections::BTreeSet<Option<(String, String)>>> =
+        std::collections::HashMap::new();
+    for (name, controller) in names.iter().zip(controllers) {
+        distinct.entry(name.clone()).or_default().insert(key(controller));
+    }
+    for (name, controller) in names.iter_mut().zip(controllers) {
+        if distinct.get(name.as_str()).is_none_or(|set| set.len() < 2) {
+            continue;
+        }
+        *name = match key(controller) {
+            Some((adb, ctl)) => format!("{name}__{}_{}", stem(&adb), stem(&ctl)),
+            None => format!("{name}__none"),
+        };
+    }
+}
+
 fn cga_entity_name(cgf_path: &str) -> String {
     let base = cgf_path.rsplit(['/', '\\']).next().unwrap_or(cgf_path);
     base.get(..base.len().saturating_sub(".cga".len())).unwrap_or(base).to_string()
@@ -139,7 +173,14 @@ pub(crate) fn extract_animated_interior_children(
                 palette: placement.palette.clone(),
                 entity_name: cga_entity_name(&cgf_path),
                 container_index,
-                controller: cgf_controllers.get(placement.mesh_index).cloned().flatten(),
+                // The placement's own class's controller; a class-less geometry
+                // placement takes the one its geometry was first spawned with.
+                controller: placement
+                    .identity
+                    .entity_class_guid
+                    .as_deref()
+                    .and_then(|guid| class_animation_controller(db, guid))
+                    .or_else(|| cgf_controllers.get(placement.mesh_index).cloned().flatten()),
                 transform: placement.transform,
                 identity: placement.identity,
                 ui_bindings: placement.ui_bindings,
@@ -150,6 +191,16 @@ pub(crate) fn extract_animated_interior_children(
 
     if anim_placements.is_empty() {
         return Vec::new();
+    }
+    // A child's name is its clips' namespace: placements of one geometry whose
+    // classes have different Mannequin controllers get their own (each clip
+    // carries its own class's fragments).
+    let mut names: Vec<String> = anim_placements.iter().map(|ap| ap.entity_name.clone()).collect();
+    let controllers: Vec<Option<crate::animation::AnimationControllerSource>> =
+        anim_placements.iter().map(|ap| ap.controller.clone()).collect();
+    namespace_by_controller(&mut names, &controllers);
+    for (ap, name) in anim_placements.iter_mut().zip(names) {
+        ap.entity_name = name;
     }
 
     // Phase 2: load each unique geometry once, in parallel (palette-independent —
@@ -228,7 +279,27 @@ pub(crate) fn extract_animated_interior_children(
 
 #[cfg(test)]
 mod tests {
-    use super::{cga_entity_name, chrparams_path_for_cga};
+    use super::{cga_entity_name, chrparams_path_for_cga, namespace_by_controller};
+    use crate::animation::AnimationControllerSource;
+
+    fn controller(adb: &str, ctl: &str) -> Option<AnimationControllerSource> {
+        Some(AnimationControllerSource { animation_database: adb.into(), animation_controller: ctl.into() })
+    }
+
+    #[test]
+    fn placements_of_one_geometry_with_different_controllers_get_their_own_namespace() {
+        // Synthetic paths: one geometry spawned by two classes with different controllers, another by one.
+        let mut names = vec!["door_a".to_string(), "door_a".to_string(), "door_a".to_string(), "lift_b".to_string(), "lift_b".to_string()];
+        let controllers = vec![
+            controller("Animations/Mannequin/ADB/Door_One.adb", "Animations/Mannequin/Door_One.xml"),
+            controller("Animations/Mannequin/ADB/Door_Two.adb", "Animations/Mannequin/Door_Two.xml"),
+            None,
+            controller("Animations/Mannequin/ADB/Lift.adb", "Animations/Mannequin/Lift.xml"),
+            controller("Animations/Mannequin/ADB/Lift.adb", "Animations/Mannequin/Lift.xml"),
+        ];
+        namespace_by_controller(&mut names, &controllers);
+        assert_eq!(names, vec!["door_a__Door_One_Door_One", "door_a__Door_Two_Door_Two", "door_a__none", "lift_b", "lift_b"]);
+    }
 
     #[test]
     fn chrparams_path_for_cga_maps_only_cga_geometry() {
