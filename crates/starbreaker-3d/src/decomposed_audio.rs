@@ -315,15 +315,19 @@ pub(crate) fn add_package_audio(db: &Database<'_>, p4k: &MappedP4k, files: &mut 
             .into_iter()
             .filter(|a| HOOKED_ITEM_COMPONENTS.iter().any(|c| a.path.contains(&format!("[{c}]"))))
             .collect();
-        if effects.is_empty() && actions.is_empty() {
+        // A door's events: its effect groups' sounds and its entity-effect tags (the tags play through `effects`).
+        let door = dce::door_effects(db, record, &tags).filter(|d| !d.events.is_empty());
+        if effects.is_empty() && actions.is_empty() && door.as_ref().is_none_or(|d| d.sounds.is_empty()) {
             continue;
         }
         effects.iter().for_each(|e| add(Some(&e.trigger), &mut triggers));
         actions.iter().for_each(|a| add(Some(&a.trigger), &mut triggers));
-        entity_classes.insert(
-            class.clone(),
-            json!({ "name": db.resolve_string2(record.name_offset), "effects": effects, "actions": actions }),
-        );
+        door.iter().flat_map(|d| &d.sounds).for_each(|s| add(Some(&s.trigger), &mut triggers));
+        let mut entry = json!({ "name": db.resolve_string2(record.name_offset), "effects": effects, "actions": actions });
+        if let Some(door) = door {
+            entry["door"] = json!(door);
+        }
+        entity_classes.insert(class.clone(), entry);
     }
 
     let environments = dce::audio_environments(db);

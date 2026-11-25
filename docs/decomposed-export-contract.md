@@ -1803,7 +1803,10 @@ Recognised by DataCore component type (`AudioTriggerSpotParams`, `AudioAreaAmbie
       "selection": "explicit | inferred_in_range | inferred_nearest_range | none", "candidates": [<environment>], "rule" } },
   "entity_classes": { "<class GUID>": { "name",
       "effects": [ { "on": "trigger | tag", "tag", "tag_path", "label", "trigger", "bone", "offset", "multi_position" } ],
-      "actions": [ { "path", "trigger" } ] } },
+      "actions": [ { "path", "trigger" } ],
+      "door": { "events": { "<open | close | opened | closed | opening | closing | override_* | locked | unlocked>":
+                              { "group", "tag", "tag_path" } },
+                "sounds": [ { "group", "trigger", "helper", "offset", "looped" } ] } } },
   "root_entity_class": "<class GUID>"
 }
 ```
@@ -1842,6 +1845,14 @@ Rules a player follows (all values are the game's; nothing is chosen per asset):
 - **Side-chains.** A game parameter a meter writes moves every curve on it: bus `rtpc` gain curves (`volume` on the
   bus's input; `bus_volume`, `output_bus_volume`, `make_up_gain` on its output) and effect parameters. Its `rtpcs[]`
   default is its value while no meter writes it (the curves' values there are in `rtpc_default_db`).
+- **Doors.** A class with `SCItemDoorParams` carries `door`: each event names the effect group it plays
+  (`<Event>EffectGroup`) and the entity-effect tag it fires (`open`, `close`, `opened`, `closed`, `locked`, `unlocked`,
+  the `override_*` forms) or holds while it lasts (`opening`, `closing`: `SCItemDoorEffectParams`; the tag plays the
+  class's `effects`). `sounds` are the class's effect-core sound nodes (`SEntityEffectCoreParams` →
+  `SEffectParamsNodeSound.SoundParams`) with a trigger, by `group` (`SoundParams.tag`): an event plays the sounds of its
+  group at `helper` + `offset` — once, or while the state lasts when `looped` (`opening` / `closing`). A node's
+  `Enabled` is its state at spawn, not a filter (the door records author nearly every node disabled). Events with
+  neither a group nor a tag are left out.
 - **Rooms.** `rooms[].environment` is the room class's `AudioPropagationParams.audioEnvironment` when set; else the
   `AudioEnvironment` record whose `interiority` range holds the class's `physicalEncapsulationValue` and whose `size`
   range holds `size_m` = cube root of the room's volume (the nearest range when between ranges). The size metric is

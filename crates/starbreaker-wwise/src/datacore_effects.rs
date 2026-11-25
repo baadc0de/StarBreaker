@@ -5,6 +5,8 @@
 //! - [`sound_effects`]: `SEntityComponentEffects.entityEffects.soundEffects` — `triggerEffects[]` (a trigger tag fires
 //!   a one-shot) and `tagEffects[]` (a sound plays while a state tag is set), each with its trigger, bone attachment
 //!   and offset.
+//! - [`door_effects`]: a door's events (`SCItemDoorParams` effect groups and `SCItemDoorEffectParams` tags) and the
+//!   effect-core sounds of its groups (`SEntityEffectCoreParams` → `SEffectParamsNodeSound`).
 //! - [`audio_strings`]: every string value of a record that names an ATL trigger, whatever its field
 //!   (`SoundParams.Name`, `heelLandAudioTrigger`, `Light_On_SFX`, `fireAudioTrigger`, …), with its property path.
 //! - [`audio_environments`]: `AudioEnvironment` records (ATL environment, size and interiority ranges).
@@ -145,6 +147,108 @@ pub fn sound_effects(db: &Database<'_>, record: &Record, tags: &HashMap<String, 
         }
     }
     out
+}
+
+/// A door event (`open`, `opened`, `opening`, …): the effect group it plays (`SCItemDoorParams.<Event>EffectGroup`) and
+/// the entity-effect tag it fires or holds (`SCItemDoorParams.EffectParams`, `SCItemDoorEffectParams`).
+#[derive(Debug, Clone, Default, Serialize, PartialEq)]
+pub struct DoorEvent {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
+    /// The tag's own name (the last element of `tag_path`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag_path: Option<String>,
+}
+
+/// An effect-core sound (`SEntityEffectCoreParams` → `SEffectParamsNodeSound.SoundParams`) of an effect group.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct DoorSound {
+    /// The effect group (`SoundParams.tag`) whose event plays it.
+    pub group: String,
+    pub trigger: String,
+    /// The helper it plays at (a bone or slot helper, `$`-prefixed for the entity's own helpers).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub helper: Option<String>,
+    pub offset: [f32; 3],
+    /// Plays while its group's state lasts (the opening / closing loops), else once.
+    pub looped: bool,
+}
+
+/// The sound side of an entity class's door.
+#[derive(Debug, Clone, Default, Serialize, PartialEq)]
+pub struct DoorEffects {
+    /// Event name → its group and tag; events with neither are left out.
+    pub events: std::collections::BTreeMap<String, DoorEvent>,
+    /// Every effect-core sound with a trigger. `Enabled` is not a filter: it is the node's state at spawn (in the door
+    /// records nearly every node is authored disabled, and the groups play them).
+    pub sounds: Vec<DoorSound>,
+}
+
+/// `SCItemDoorParams` effect-group fields and `SCItemDoorEffectParams` tag fields, by event.
+const DOOR_EVENTS: [(&str, &str, &str); 14] = [
+    ("open", "OpenEffectGroup", "openTrigger"),
+    ("close", "CloseEffectGroup", "closeTrigger"),
+    ("opened", "OpenedEffectGroup", "openedTrigger"),
+    ("closed", "ClosedEffectGroup", "closedTrigger"),
+    ("opening", "OpeningEffectGroup", "openingTag"),
+    ("closing", "ClosingEffectGroup", "closingTag"),
+    ("override_open", "OverrideOpenEffectGroup", "overrideOpenTrigger"),
+    ("override_close", "OverrideCloseEffectGroup", "overrideCloseTrigger"),
+    ("override_opened", "OverrideOpenedEffectGroup", "overrideOpenedTrigger"),
+    ("override_closed", "OverrideClosedEffectGroup", "overrideClosedTrigger"),
+    ("override_opening", "OverrideOpeningEffectGroup", "overrideOpeningTag"),
+    ("override_closing", "OverrideClosingEffectGroup", "overrideClosingTag"),
+    ("locked", "LockedEffectGroup", "lockedTrigger"),
+    ("unlocked", "UnlockedEffectGroup", "unlockedTrigger"),
+];
+
+/// The door effects of an entity class record; `None` when it has no `SCItemDoorParams`.
+pub fn door_effects(db: &Database<'_>, record: &Record, tags: &HashMap<String, String>) -> Option<DoorEffects> {
+    let door = query(db, record, "Components[SCItemDoorParams]").into_iter().next()?;
+    let effect_params = field(&door, "EffectParams");
+    let mut out = DoorEffects::default();
+    for (event, group_field, tag_field) in DOOR_EVENTS {
+        let group = string(field(&door, group_field)).filter(|g| !g.is_empty()).map(str::to_owned);
+        let tag_path = effect_params.and_then(|p| reference_id(field(p, tag_field))).and_then(|id| tags.get(&id).cloned());
+        if group.is_none() && tag_path.is_none() {
+            continue;
+        }
+        let tag = tag_path.as_deref().map(|p| p.rsplit('/').next().unwrap_or_default().to_owned());
+        out.events.insert(event.to_owned(), DoorEvent { group, tag, tag_path });
+    }
+    fn walk(node: &Value<'_>, out: &mut Vec<DoorSound>) {
+        match node {
+            Value::Array(items) => items.iter().for_each(|n| walk(n, out)),
+            Value::Object { type_name, .. } => {
+                if *type_name == "SEffectParamsNodeSound"
+                    && let Some(sound) = field(node, "SoundParams")
+                    && let Some(trigger) = string(field(sound, "Name")).filter(|t| !t.is_empty())
+                {
+                    let position = field(sound, "Offset").and_then(|o| field(o, "Position"));
+                    let axis = |k| number(position.and_then(|p| field(p, k))).unwrap_or(0.0);
+                    out.push(DoorSound {
+                        group: string(field(sound, "tag")).unwrap_or_default().to_owned(),
+                        trigger: trigger.to_owned(),
+                        helper: string(field(sound, "Helper")).filter(|h| !h.is_empty()).map(str::to_owned),
+                        offset: [axis("x"), axis("y"), axis("z")],
+                        looped: matches!(field(sound, "IsLooped"), Some(Value::Bool(true))),
+                    });
+                }
+                if let Some(sub) = field(node, "SubNodes") {
+                    walk(sub, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    // The node list is polymorphic: the query names the sound nodes' type (a typed path, as `Components[...]`). In the
+    // door records every sound node is at the top level; a sound node's own sound sub-nodes are walked too.
+    for nodes in query(db, record, "Components[SEntityEffectCoreParams].EffectParams[SEffectParamsNodeSound]") {
+        walk(&nodes, &mut out.sounds);
+    }
+    Some(out)
 }
 
 /// An ATL trigger named by a record field.

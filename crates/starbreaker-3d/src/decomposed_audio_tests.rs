@@ -82,6 +82,33 @@ fn c2_lift_sound_effects_from_datacore() {
     assert!(envs.iter().any(|(n, e)| n.starts_with("VERB_SYS_INT") && e.interiority.1 == 1.0));
 }
 
+/// Game data (skips without a Data.p4k): a door's events name effect groups (`SCItemDoorParams.*EffectGroup`) whose
+/// effect-core sound nodes (`SEntityEffectCoreParams`, enabled or not) play on them, and entity-effect tags
+/// (`SCItemDoorEffectParams`); placeholder nodes without a trigger are left out. The hangar loading platform's gate.
+#[test]
+fn loading_gate_door_effects_from_datacore() {
+    let Some(p4k) = crate::test_p4k::p4k() else { return };
+    let dcb = p4k.read_file(r"Data\Game2.dcb").or_else(|_| p4k.read_file(r"Data\Game.dcb")).unwrap();
+    let db = Database::from_bytes(&dcb).unwrap();
+    let tags = dce::tag_paths(&db);
+    let class = |name: &str| db.records_by_type_name("EntityClassDefinition").find(|r| db.resolve_string2(r.name_offset) == name).unwrap();
+    let door = dce::door_effects(&db, class("EntityClassDefinition.LoadingPlatformLoadingGate"), &tags).expect("a door");
+    assert_eq!(door.events["open"].group.as_deref(), Some("OpenGroup"));
+    assert_eq!(door.events["closed"].group.as_deref(), Some("ClosedGroup"));
+    assert_eq!(door.events["override_open"].group.as_deref(), Some("OvOpenGroup"));
+    assert!(door.events["open"].tag_path.as_deref().is_some_and(|p| !p.is_empty()), "{:?}", door.events["open"]);
+    assert!(!door.events.contains_key("locked"), "an empty group and no tag: no event");
+    let open: Vec<_> = door.sounds.iter().filter(|s| s.group == "OpenGroup").collect();
+    assert_eq!(open.len(), 1, "{:?}", door.sounds);
+    assert_eq!(open[0].trigger, "Play_MCDR_Metal_Door_Open");
+    assert_eq!(open[0].helper.as_deref(), Some("$slot_sensor"));
+    assert!(!open[0].looped);
+    assert!(door.sounds.iter().all(|s| !s.trigger.is_empty()), "placeholders left out");
+    assert!(!door.sounds.iter().any(|s| s.group == "OpeningGroup"), "its opening loop is a placeholder");
+    // A class without a door has none.
+    assert!(dce::door_effects(&db, class("EntityClassDefinition.CRUS_Hercules_Elevator_ButtonsCall"), &tags).is_none());
+}
+
 
 /// Untriggered placed spots are extra positions of the spots that link them (`audio_entities`), decided before class
 /// defaults merge. That is only sound while no entity class carrying `AudioTriggerSpotParams` authors a default
