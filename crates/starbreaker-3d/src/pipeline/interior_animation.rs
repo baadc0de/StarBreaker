@@ -54,30 +54,23 @@ fn class_animation_controller(db: &Database, guid: &str) -> Option<crate::animat
     super::query_animation_controller_source(db, record).filter(|source| !source.animation_database.is_empty())
 }
 
-/// Within each group of equal names, names whose controllers differ get the
-/// controller's database and controller file stems appended (`<name>__<adb>_<controller>`;
-/// `<name>__none` without one); a group with one controller keeps its name.
-fn namespace_by_controller(names: &mut [String], controllers: &[Option<crate::animation::AnimationControllerSource>]) {
-    let key = |c: &Option<crate::animation::AnimationControllerSource>| {
-        c.as_ref().map(|c| (c.animation_database.clone(), c.animation_controller.clone()))
-    };
-    let stem = |path: &str| {
-        let base = path.rsplit(['/', '\\']).next().unwrap_or(path);
-        base.rsplit_once('.').map_or(base, |(s, _)| s).to_string()
-    };
-    let mut distinct: std::collections::HashMap<String, std::collections::BTreeSet<Option<(String, String)>>> =
-        std::collections::HashMap::new();
-    for (name, controller) in names.iter().zip(controllers) {
-        distinct.entry(name.clone()).or_default().insert(key(controller));
-    }
-    for (name, controller) in names.iter_mut().zip(controllers) {
-        if distinct.get(name.as_str()).is_none_or(|set| set.len() < 2) {
-            continue;
+/// The controller of one clip namespace (a promoted geometry's placements): the
+/// one their classes agree on (classes without one ignored). Placements whose
+/// classes have different controllers give the namespace none (`Err` lists
+/// them): its clips are shared, so no class's fragments are right for all.
+pub(crate) fn namespace_controller(
+    controllers: &[Option<crate::animation::AnimationControllerSource>],
+) -> Result<Option<crate::animation::AnimationControllerSource>, Vec<String>> {
+    let mut distinct: Vec<&crate::animation::AnimationControllerSource> = Vec::new();
+    for c in controllers.iter().flatten() {
+        if !distinct.iter().any(|d| d.animation_database == c.animation_database && d.animation_controller == c.animation_controller) {
+            distinct.push(c);
         }
-        *name = match key(controller) {
-            Some((adb, ctl)) => format!("{name}__{}_{}", stem(&adb), stem(&ctl)),
-            None => format!("{name}__none"),
-        };
+    }
+    match distinct.as_slice() {
+        [] => Ok(None),
+        [one] => Ok(Some((*one).clone())),
+        many => Err(many.iter().map(|c| c.animation_database.clone()).collect()),
     }
 }
 
@@ -173,14 +166,13 @@ pub(crate) fn extract_animated_interior_children(
                 palette: placement.palette.clone(),
                 entity_name: cga_entity_name(&cgf_path),
                 container_index,
-                // The placement's own class's controller; a class-less geometry
-                // placement takes the one its geometry was first spawned with.
-                controller: placement
-                    .identity
-                    .entity_class_guid
-                    .as_deref()
-                    .and_then(|guid| class_animation_controller(db, guid))
-                    .or_else(|| cgf_controllers.get(placement.mesh_index).cloned().flatten()),
+                // The placement's own class's controller (none for a class without
+                // one); a class-less geometry placement takes the one its geometry
+                // was first spawned with.
+                controller: match placement.identity.entity_class_guid.as_deref() {
+                    Some(guid) => class_animation_controller(db, guid),
+                    None => cgf_controllers.get(placement.mesh_index).cloned().flatten(),
+                },
                 transform: placement.transform,
                 identity: placement.identity,
                 ui_bindings: placement.ui_bindings,
@@ -191,16 +183,6 @@ pub(crate) fn extract_animated_interior_children(
 
     if anim_placements.is_empty() {
         return Vec::new();
-    }
-    // A child's name is its clips' namespace: placements of one geometry whose
-    // classes have different Mannequin controllers get their own (each clip
-    // carries its own class's fragments).
-    let mut names: Vec<String> = anim_placements.iter().map(|ap| ap.entity_name.clone()).collect();
-    let controllers: Vec<Option<crate::animation::AnimationControllerSource>> =
-        anim_placements.iter().map(|ap| ap.controller.clone()).collect();
-    namespace_by_controller(&mut names, &controllers);
-    for (ap, name) in anim_placements.iter_mut().zip(names) {
-        ap.entity_name = name;
     }
 
     // Phase 2: load each unique geometry once, in parallel (palette-independent —
@@ -279,7 +261,7 @@ pub(crate) fn extract_animated_interior_children(
 
 #[cfg(test)]
 mod tests {
-    use super::{cga_entity_name, chrparams_path_for_cga, namespace_by_controller};
+    use super::{cga_entity_name, chrparams_path_for_cga, namespace_controller};
     use crate::animation::AnimationControllerSource;
 
     fn controller(adb: &str, ctl: &str) -> Option<AnimationControllerSource> {
@@ -287,18 +269,17 @@ mod tests {
     }
 
     #[test]
-    fn placements_of_one_geometry_with_different_controllers_get_their_own_namespace() {
-        // Synthetic paths: one geometry spawned by two classes with different controllers, another by one.
-        let mut names = vec!["door_a".to_string(), "door_a".to_string(), "door_a".to_string(), "lift_b".to_string(), "lift_b".to_string()];
-        let controllers = vec![
-            controller("Animations/Mannequin/ADB/Door_One.adb", "Animations/Mannequin/Door_One.xml"),
-            controller("Animations/Mannequin/ADB/Door_Two.adb", "Animations/Mannequin/Door_Two.xml"),
-            None,
-            controller("Animations/Mannequin/ADB/Lift.adb", "Animations/Mannequin/Lift.xml"),
-            controller("Animations/Mannequin/ADB/Lift.adb", "Animations/Mannequin/Lift.xml"),
-        ];
-        namespace_by_controller(&mut names, &controllers);
-        assert_eq!(names, vec!["door_a__Door_One_Door_One", "door_a__Door_Two_Door_Two", "door_a__none", "lift_b", "lift_b"]);
+    fn a_clip_namespace_takes_the_controller_its_classes_agree_on() {
+        // Synthetic paths.
+        let lift = controller("Animations/Mannequin/ADB/Lift.adb", "Animations/Mannequin/Lift.xml");
+        let agreed = namespace_controller(&[lift.clone(), None, lift.clone()]).expect("one controller");
+        assert_eq!(agreed.map(|c| c.animation_database), Some("Animations/Mannequin/ADB/Lift.adb".to_string()), "classes without one are ignored");
+        assert!(namespace_controller(&[None, None]).expect("none").is_none());
+        let conflict = namespace_controller(&[
+            controller("Animations/Mannequin/ADB/Door_One.adb", "Animations/Mannequin/Door.xml"),
+            controller("Animations/Mannequin/ADB/Door_Two.adb", "Animations/Mannequin/Door.xml"),
+        ]);
+        assert_eq!(conflict.err().map(|e| e.len()), Some(2), "different controllers: none for the shared clips");
     }
 
     #[test]

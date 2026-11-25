@@ -185,7 +185,10 @@ Each `children[]` entry (`scene_instance_json`) carries:
   placement itself is not in `interiors[].placements[]`. Its clips (owner
   `entity_name`, the `.cga` stem) carry the `fragments` of its class's
   `SAnimationControllerParams` Mannequin database (`SCItemDoor` `Open` / `Close`
-  for a door), as a root entity's clips do. `hangar_xltop_001` promotes 144
+  for a door), as a root entity's clips do: the controller its placements'
+  classes agree on (classes without one ignored; a class-less placement takes its
+  geometry's; classes with different controllers give its shared clips none,
+  logged). `hangar_xltop_001` promotes 144
   placements, 91 of them doors.
 
 Loadout children include the items of an entity class whose default loadout is

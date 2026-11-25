@@ -620,11 +620,23 @@ where
         child.skeleton_source_path.as_ref().map(|path| (child.entity_name.clone(), path.clone()))
     }));
     for source in &mut animation_sources {
-        source.controller = interiors
+        let controllers: Vec<_> = interiors
             .promoted
             .iter()
             .filter(|p| children.get(p.child_index).is_some_and(|c| c.entity_name == source.owner_entity))
-            .find_map(|p| p.controller.clone());
+            .map(|p| p.controller.clone())
+            .collect();
+        source.controller = match namespace_controller(&controllers) {
+            Ok(controller) => controller,
+            Err(databases) => {
+                log::warn!(
+                    "[anim] {}: its placements' classes have different Mannequin controllers ({}): its shared clips get no fragments",
+                    source.owner_entity,
+                    databases.join(", ")
+                );
+                None
+            }
+        };
     }
     let input = DecomposedInput {
         entity_name: export_name.to_string(),
