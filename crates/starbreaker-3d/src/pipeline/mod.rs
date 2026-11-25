@@ -619,6 +619,7 @@ where
     let mut animation_sources = crate::animation::rig_sources::rig_sources(None, children.iter().filter_map(|child| {
         child.skeleton_source_path.as_ref().map(|path| (child.entity_name.clone(), path.clone()))
     }));
+    let mut warned = std::collections::HashSet::new(); // one warning per clip namespace (its sources repeat per placement)
     for source in &mut animation_sources {
         let controllers: Vec<_> = interiors
             .promoted
@@ -629,11 +630,11 @@ where
         source.controller = match namespace_controller(&controllers) {
             Ok(controller) => controller,
             Err(databases) => {
-                log::warn!(
+                if warned.insert(source.owner_entity.clone()) { log::warn!(
                     "[anim] {}: its placements' classes have different Mannequin controllers ({}): its shared clips get no fragments",
                     source.owner_entity,
                     databases.join(", ")
-                );
+                ); }
                 None
             }
         };
