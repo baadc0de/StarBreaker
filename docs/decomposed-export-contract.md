@@ -170,6 +170,23 @@ Each `children[]` entry (`scene_instance_json`) carries:
   to `hardpoint_front_door_right`, `hardpoint_front_door_left` and
   `hardpoint_front_ramp`.
 - `ui_bindings[]` (see [UI Bindings](#ui-bindings))
+- `placement` (cache format 45; socpak exports only): present on a child that is
+  an animated interior placement promoted to a child so its clips are extracted
+  (a `.cga` with a sibling `.chrparams`: hangar doors, elevator gates, shaft
+  doors; `pipeline/interior_animation.rs`). It keeps the placement's identity in
+  its container: the keys of an `interiors[].placements[]` entry that carry
+  identity (`entity_id`, `entity_class_guid`, `links`, `entity_name` (the `.soc`
+  name), `interaction_links`, `parent_attachment`, `door`, `ladder`,
+  `interaction_points`, `item_port_links`, `sendable_interactions`,
+  `usable_interactions`, `loadout_owner_entity_id`, `item_port_name`), its
+  `transform` in the container, and `interior` (the `interiors` index its ids
+  belong to). It has no geometry or UI keys: the child carries them (the child's
+  own `door`, `item_port_links` and `ui_bindings` are the placement's). The
+  placement itself is not in `interiors[].placements[]`. Its clips (owner
+  `entity_name`, the `.cga` stem) carry the `fragments` of its class's
+  `SAnimationControllerParams` Mannequin database (`SCItemDoor` `Open` / `Close`
+  for a door), as a root entity's clips do. `hangar_xltop_001` promotes 144
+  placements, 91 of them doors.
 
 Loadout children include the items of an entity class whose default loadout is
 an XML file (`SItemPortLoadoutXMLParams.loadoutPath`, e.g.

@@ -175,6 +175,9 @@ struct SceneInstanceRecord {
     /// The entity class's vehicle item-port interaction links.
     item_port_links: Vec<crate::types::ItemPortLink>,
     seat_data: crate::pipeline::seat_records::ChildSeatRecords,
+    /// An interior placement promoted to this child (an animated socpak `.cga`):
+    /// the `interiors` index its ids belong to and its identity.
+    placement: Option<crate::pipeline::PromotedPlacement>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1648,6 +1651,12 @@ pub(crate) fn write_decomposed_export(
             door: child.door.clone(),
             item_port_links: child.item_port_links.clone(),
             seat_data,
+            placement: input
+                .interiors
+                .promoted
+                .iter()
+                .find(|p| p.child_index == index)
+                .cloned(),
         });
 
         if child_count > 0 {
@@ -2609,6 +2618,43 @@ fn vehicle_inventory_containers_json(
 }
 
 fn scene_instance_json(instance: &SceneInstanceRecord) -> serde_json::Value {
+    let mut json = scene_instance_fields_json(instance);
+    // A promoted interior placement: its identity and transform as `interiors[].placements[]` has them (no geometry:
+    // the child is it), and the `interiors` index its ids belong to.
+    if let Some(promoted) = &instance.placement {
+        let mut placement = placement_identity_json(&promoted.identity);
+        placement.insert("interior".to_string(), serde_json::json!(promoted.container_index));
+        placement.insert("transform".to_string(), serde_json::json!(promoted.transform));
+        json["placement"] = serde_json::Value::Object(placement);
+    }
+    json
+}
+
+/// A placement's identity keys (`interiors[].placements[]`, and a promoted
+/// child's `placement`).
+fn placement_identity_json(identity: &crate::types::PlacementIdentity) -> serde_json::Map<String, serde_json::Value> {
+    let serde_json::Value::Object(map) = serde_json::json!({
+        "entity_class_guid": identity.entity_class_guid,
+        "entity_id": identity.entity_id,
+        "links": identity.links,
+        "loadout_owner_entity_id": identity.loadout_owner_entity_id,
+        "item_port_name": identity.item_port_name,
+        "entity_name": identity.entity_name,
+        "interaction_links": identity.interaction_links,
+        "parent_attachment": identity.parent,
+        "door": identity.door,
+        "ladder": identity.ladder,
+        "interaction_points": identity.interaction_points,
+        "item_port_links": identity.item_port_links,
+        "sendable_interactions": identity.sendable_interactions,
+        "usable_interactions": identity.usable_interactions,
+    }) else {
+        unreachable!("a json! object literal")
+    };
+    map
+}
+
+fn scene_instance_fields_json(instance: &SceneInstanceRecord) -> serde_json::Value {
     serde_json::json!({
         "entity_name": instance.entity_name,
         "geometry_path": instance.geometry_path,
@@ -2645,29 +2691,20 @@ fn interior_container_json(container: &InteriorContainerRecord) -> serde_json::V
         "palette_id": container.palette_id,
         "container_transform": container.container_transform,
         "placements": container.placements.iter().map(|placement| {
-            serde_json::json!({
-                "cgf_path": placement.cgf_path,
-                "material_path": placement.material_path,
-                "mesh_asset": placement.mesh_asset,
-                "material_sidecar": placement.material_sidecar,
-                "entity_class_guid": placement.identity.entity_class_guid,
-                "entity_id": placement.identity.entity_id,
-                "links": placement.identity.links,
-                "loadout_owner_entity_id": placement.identity.loadout_owner_entity_id,
-                "item_port_name": placement.identity.item_port_name,
-                "entity_name": placement.identity.entity_name,
-                "interaction_links": placement.identity.interaction_links,
-                "parent_attachment": placement.identity.parent,
-                "door": placement.identity.door,
-                "ladder": placement.identity.ladder,
-                "interaction_points": placement.identity.interaction_points,
-                "item_port_links": placement.identity.item_port_links,
-                "sendable_interactions": placement.identity.sendable_interactions,
-                "usable_interactions": placement.identity.usable_interactions,
-                "ui_bindings": placement.ui_bindings.iter().map(ui_binding_json).collect::<Vec<_>>(),
-                "transform": placement.transform,
-                "palette_id": placement.palette_id,
-            })
+            let mut json = placement_identity_json(&placement.identity);
+            json.extend(
+                [
+                    ("cgf_path", serde_json::json!(placement.cgf_path)),
+                    ("material_path", serde_json::json!(placement.material_path)),
+                    ("mesh_asset", serde_json::json!(placement.mesh_asset)),
+                    ("material_sidecar", serde_json::json!(placement.material_sidecar)),
+                    ("ui_bindings", serde_json::json!(placement.ui_bindings.iter().map(ui_binding_json).collect::<Vec<_>>())),
+                    ("transform", serde_json::json!(placement.transform)),
+                    ("palette_id", serde_json::json!(placement.palette_id)),
+                ]
+                .map(|(key, value)| (key.to_string(), value)),
+            );
+            serde_json::Value::Object(json)
         }).collect::<Vec<_>>(),
         "lights": container.lights,
         "room_volumes": container.room_volumes,
@@ -8273,6 +8310,7 @@ mod tests {
                 target_slot: "In".into(),
             }],
             seat_data: crate::pipeline::seat_records::ChildSeatRecords::default(),
+            placement: None,
         };
         assert!(scene_instance_json(&child).as_object().unwrap().contains_key("item_type"));
         assert_eq!(scene_instance_json(&child)["item_type"], "Seat");
@@ -8287,6 +8325,34 @@ mod tests {
         assert_eq!(scene_instance_json(&plain)["item_port_links"], serde_json::json!([]));
         let unknown = SceneInstanceRecord { item_type: None, ..child.clone() };
         assert!(scene_instance_json(&unknown)["item_type"].is_null());
+        assert!(scene_instance_json(&child).get("placement").is_none(), "not a promoted placement: no key");
+        // A promoted interior placement (an animated socpak door) keeps its identity under `placement`, with the
+        // `interiors` index its ids belong to; synthetic ids.
+        let promoted = SceneInstanceRecord {
+            placement: Some(crate::pipeline::PromotedPlacement {
+                child_index: 0,
+                container_index: 2,
+                identity: crate::types::PlacementIdentity {
+                    entity_id: Some("e1".into()),
+                    entity_class_guid: Some("c1".into()),
+                    links: vec!["e2".into()],
+                    entity_name: Some("Door_1".into()),
+                    ..Default::default()
+                },
+                transform: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [5.0, 6.0, 7.0, 1.0]],
+                controller: None,
+            }),
+            ..child.clone()
+        };
+        let json = scene_instance_json(&promoted);
+        assert_eq!(json["placement"]["interior"], 2);
+        assert_eq!(json["placement"]["transform"][3], serde_json::json!([5.0, 6.0, 7.0, 1.0]));
+        assert!(json["placement"].get("mesh_asset").is_none(), "no geometry of its own: the child is it");
+        assert_eq!(json["placement"]["entity_id"], "e1");
+        assert_eq!(json["placement"]["entity_class_guid"], "c1");
+        assert_eq!(json["placement"]["links"], serde_json::json!(["e2"]));
+        assert_eq!(json["placement"]["entity_name"], "Door_1");
+        assert_eq!(json["entity_name"], "child_a", "the child's own name (its clips' namespace) stays");
         let interior = InteriorContainerRecord {
             name: "interior_main".into(),
             parent_entity_name: Some("child_entity".into()),

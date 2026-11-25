@@ -72,6 +72,8 @@ pub(crate) fn extract_animated_interior_children(
         .iter()
         .map(|e| (e.cgf_path.clone(), e.material_path.clone()))
         .collect();
+    let cgf_controllers: Vec<Option<crate::animation::AnimationControllerSource>> =
+        interiors.unique_cgfs.iter().map(|e| e.animation_controller.clone()).collect();
 
     // Phase 1: detect animated placements and remove them from the static
     // interior placements (de-dup geometry). Records each placement's world
@@ -85,13 +87,19 @@ pub(crate) fn extract_animated_interior_children(
         offset_rotation: [f32; 3],
         palette: Option<crate::mtl::TintPalette>,
         entity_name: String,
+        // The placement's identity, kept by the child (a hangar door stays that door entity).
+        container_index: usize,
+        transform: [[f32; 4]; 4],
+        identity: crate::types::PlacementIdentity,
+        ui_bindings: Vec<crate::types::UiBinding>,
+        controller: Option<crate::animation::AnimationControllerSource>,
     }
     let mut unique_keys: Vec<(String, Option<String>)> = Vec::new();
     let mut key_index: std::collections::HashMap<(String, Option<String>), usize> =
         std::collections::HashMap::new();
     let mut anim_placements: Vec<AnimPlacement> = Vec::new();
 
-    for container in &mut interiors.containers {
+    for (container_index, container) in interiors.containers.iter_mut().enumerate() {
         let container_mat = glam::Mat4::from_cols_array_2d(&container.container_transform);
         let mut kept = Vec::with_capacity(container.placements.len());
         for placement in std::mem::take(&mut container.placements) {
@@ -130,6 +138,11 @@ pub(crate) fn extract_animated_interior_children(
                 offset_rotation: [rx.to_degrees(), ry.to_degrees(), rz.to_degrees()],
                 palette: placement.palette.clone(),
                 entity_name: cga_entity_name(&cgf_path),
+                container_index,
+                controller: cgf_controllers.get(placement.mesh_index).cloned().flatten(),
+                transform: placement.transform,
+                identity: placement.identity,
+                ui_bindings: placement.ui_bindings,
             });
         }
         container.placements = kept;
@@ -173,6 +186,16 @@ pub(crate) fn extract_animated_interior_children(
         let Some(loaded_payload) = loaded[ap.unique_index].as_ref() else {
             continue;
         };
+        // The placement's own door (class values with the instance's overrides)
+        // and links travel on the child as on a loadout child; the rest of its
+        // identity is exported with it (scene.json `children[].placement`).
+        interiors.promoted.push(super::interiors::PromotedPlacement {
+            child_index: children.len(),
+            container_index: ap.container_index,
+            identity: ap.identity.clone(),
+            transform: ap.transform,
+            controller: ap.controller,
+        });
         children.push(EntityPayload {
             mesh: loaded_payload.mesh.clone(),
             materials: loaded_payload.materials.clone(),
@@ -187,8 +210,8 @@ pub(crate) fn extract_animated_interior_children(
             entity_name: ap.entity_name,
             entity_category: None,
             attach_def_type: None,
-            door: None,
-            item_port_links: Vec::new(),
+            door: ap.identity.door.clone(),
+            item_port_links: ap.identity.item_port_links.clone(),
             parent_node_name: String::new(),
             parent_entity_name: String::new(),
             no_rotation: false,
@@ -197,7 +220,7 @@ pub(crate) fn extract_animated_interior_children(
             detach_direction: [0.0; 3],
             port_flags: String::new(),
             port_path: None,
-            ui_bindings: Vec::new(),
+            ui_bindings: ap.ui_bindings,
         });
     }
     children

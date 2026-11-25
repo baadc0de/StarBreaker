@@ -2251,6 +2251,7 @@ fn create_test_input(entity_name: &str, num_children: usize) -> DecomposedInput 
         interiors: LoadedInteriors {
             unique_cgfs: vec![],
             containers: vec![],
+            promoted: Vec::new(),
         },
         paint_variants: vec![],
         animations: Vec::new(),

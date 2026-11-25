@@ -292,6 +292,10 @@ pub(crate) fn add_package_audio(db: &Database<'_>, p4k: &MappedP4k, files: &mut 
         if let Some(name) = child["entity_name"].as_str() {
             child_names.insert(name);
         }
+        // A promoted interior placement names its class by GUID, as the placement did.
+        if let Some(g) = child["placement"]["entity_class_guid"].as_str() {
+            classes.insert(g.to_ascii_lowercase());
+        }
     }
     for name in child_names {
         if let Some(class) = class_of(name) {

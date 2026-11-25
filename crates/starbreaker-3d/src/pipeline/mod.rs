@@ -613,6 +613,19 @@ where
         children.len(),
         anim_children_start.elapsed().as_secs_f32()
     );
+    // Each promoted child's clips get the Mannequin fragments of its own class's
+    // controller (a hangar door's Open / Close), as a ship's root clips get the
+    // root's: without them the viewer cannot play it as a door.
+    let mut animation_sources = crate::animation::rig_sources::rig_sources(None, children.iter().filter_map(|child| {
+        child.skeleton_source_path.as_ref().map(|path| (child.entity_name.clone(), path.clone()))
+    }));
+    for source in &mut animation_sources {
+        source.controller = interiors
+            .promoted
+            .iter()
+            .filter(|p| children.get(p.child_index).is_some_and(|c| c.entity_name == source.owner_entity))
+            .find_map(|p| p.controller.clone());
+    }
     let input = DecomposedInput {
         entity_name: export_name.to_string(),
         geometry_path: String::new(),
@@ -626,9 +639,7 @@ where
         root_palette: None,
         available_palettes: Vec::new(),
         root_bones: Vec::new(),
-        animation_sources: crate::animation::rig_sources::rig_sources(None, children.iter().filter_map(|child| {
-            child.skeleton_source_path.as_ref().map(|path| (child.entity_name.clone(), path.clone()))
-        })),
+        animation_sources,
         root_animation_controller: None,
         children,
         interiors,

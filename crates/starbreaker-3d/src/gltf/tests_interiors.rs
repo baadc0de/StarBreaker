@@ -48,6 +48,7 @@ fn container(parent_node_name: Option<&str>) -> LoadedInteriors {
             lifts: Vec::new(),
             inventory_containers: Vec::new(),
         }],
+        promoted: Vec::new(),
     }
 }
 

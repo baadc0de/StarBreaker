@@ -31,6 +31,25 @@ pub(crate) struct LoadedInteriors {
     /// socpak with child socpak references expands to its root container plus
     /// one entry per recursively-discovered child socpak).
     pub containers: Vec<InteriorContainerData>,
+    /// Animated placements promoted to decomposed children
+    /// (`extract_animated_interior_children`): their identity, kept for the child.
+    pub promoted: Vec<PromotedPlacement>,
+}
+
+/// An interior placement promoted to a decomposed child: the child keeps the
+/// placement's identity (entity id, class, links, door, interactions), its
+/// container (the `interiors` index its ids belong to) and its class's animation
+/// controller (Mannequin fragments for its clips).
+#[derive(Debug, Clone)]
+pub(crate) struct PromotedPlacement {
+    /// Index into the decomposed `children`.
+    pub child_index: usize,
+    /// Index into `containers` (and the exported `interiors`).
+    pub container_index: usize,
+    pub identity: crate::types::PlacementIdentity,
+    /// The placement's transform in its container (as `interiors[].placements[].transform`).
+    pub transform: [[f32; 4]; 4],
+    pub controller: Option<crate::animation::AnimationControllerSource>,
 }
 
 impl Default for LoadedInteriors {
@@ -38,6 +57,7 @@ impl Default for LoadedInteriors {
         Self {
             unique_cgfs: Vec::new(),
             containers: Vec::new(),
+            promoted: Vec::new(),
         }
     }
 }
@@ -915,6 +935,7 @@ pub(crate) fn build_interiors_from_payloads(
     LoadedInteriors {
         unique_cgfs,
         containers: container_data,
+        promoted: Vec::new(),
     }
 }
 
@@ -2233,6 +2254,7 @@ mod tests {
                     inventory_containers: Vec::new(),
                 },
             ],
+            promoted: Vec::new(),
         };
 
         let removed = remove_root_geometry_duplicate_interior_placements(
