@@ -152,6 +152,12 @@ impl ChrParams {
             let segments: Vec<&str> = rule.split(['/', '\\']).collect();
             let Some(first) = segments.iter().position(|s| s.contains(['*', '?'])) else { continue };
             let dir = segments[..first].join("/");
+            if dir.is_empty() {
+                // No `#filepath` in effect: the rule would match every file of the archive, not the rig's own.
+                log::warn!("[anim] chrparams wildcard rule `{rule}` has no #filepath directory: not expanded");
+                self.wildcards.push(rule);
+                continue;
+            }
             let recursive = segments[first] == "**";
             let Some(pattern) = segments.last().copied() else { continue };
             for path in files(&dir, recursive) {
@@ -290,6 +296,14 @@ mod tests {
         assert_eq!(cp.animations.get("rifle_fire_bolt_01").map(String::as_str), Some("Animations/synthetic/rifle/sub/rifle_fire_bolt_01.CAF"));
         assert_eq!(cp.animations.get("rifle_reload").map(String::as_str), Some("Animations/synthetic/rifle/rifle_reload_declared.caf"), "a declared name keeps its path");
         assert!(!cp.animations.contains_key("notes"), "only files the rule matches");
+    }
+
+    #[test]
+    fn a_wildcard_rule_without_a_filepath_is_not_expanded_over_the_archive() {
+        let mut cp = ChrParams::from_entries([("**/*.caf", "**/*.caf")]);
+        assert_eq!(cp.wildcards, vec!["**/*.caf".to_string()]);
+        cp.expand_wildcards(|_, _| panic!("no archive walk without a directory"));
+        assert!(cp.animations.is_empty());
     }
 
     #[test]
