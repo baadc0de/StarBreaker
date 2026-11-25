@@ -317,7 +317,8 @@ pub(crate) fn add_package_audio(db: &Database<'_>, p4k: &MappedP4k, files: &mut 
             .collect();
         // A door's events: its effect groups' sounds and its entity-effect tags (the tags play through `effects`).
         let door = dce::door_effects(db, record, &tags).filter(|d| !d.events.is_empty());
-        if effects.is_empty() && actions.is_empty() && door.as_ref().is_none_or(|d| d.sounds.is_empty()) {
+        // A door with events but no sound of its own is kept: its events still name tags that play the class's effects.
+        if effects.is_empty() && actions.is_empty() && door.is_none() {
             continue;
         }
         effects.iter().for_each(|e| add(Some(&e.trigger), &mut triggers));
