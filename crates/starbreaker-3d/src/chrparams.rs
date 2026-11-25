@@ -25,6 +25,10 @@
 //!   logic) to a `.caf` path, which names one clip of the tracks database.
 //! - Directive names compare case-insensitively (`#filePath`, `#Filepath`
 //!   occur in shipped files).
+//! - A wildcard entry (`name="**/*.caf"`) declares every `.caf` it matches
+//!   under its `#filepath` as an animation named after its file: from the
+//!   tracks database when there is one, else the loose files
+//!   ([`ChrParams::expand_wildcards`]; the BEHR P6-LR sniper has no database).
 //!
 //! The rules were checked against every `.chrparams` / `.dba` pair of a
 //! shipped archive: the path built this way names a clip of the declared
