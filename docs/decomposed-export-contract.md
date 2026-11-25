@@ -188,8 +188,7 @@ Each `children[]` entry (`scene_instance_json`) carries:
   for a door), as a root entity's clips do: the controller its placements'
   classes agree on (classes without one ignored; a class-less placement takes its
   geometry's; classes with different controllers give its shared clips none,
-  logged). `hangar_xltop_001` promotes 144
-  placements, 91 of them doors.
+  logged).
 
 Loadout children include the items of an entity class whose default loadout is
 an XML file (`SItemPortLoadoutXMLParams.loadoutPath`, e.g.
