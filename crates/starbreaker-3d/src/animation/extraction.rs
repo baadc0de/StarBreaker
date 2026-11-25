@@ -61,7 +61,7 @@ pub(crate) fn extract_skeleton_json(
     };
 
     // Parse chrparams to get tracks database path
-    let chrparams = match crate::chrparams::ChrParams::from_bytes(&chrparams_data) {
+    let mut chrparams = match crate::chrparams::ChrParams::from_bytes(&chrparams_data) {
         Ok(value) => value,
         Err(error) => {
             let text = error.to_string();
@@ -104,6 +104,11 @@ pub(crate) fn extract_skeleton_json(
         skeleton_bone_name_by_hash.len()
     );
 
+    // A rig without a tracks database plays the loose CAFs its wildcard rules match (a weapon whose
+    // chrparams declares only `#filepath` and `**/*.caf`).
+    if chrparams.tracks_database.is_none() && !chrparams.wildcards.is_empty() {
+        chrparams.expand_wildcards(|dir, recursive| archive_files_under(p4k, dir, recursive));
+    }
     let dba_path = chrparams.tracks_database.clone();
     let db = load_tracks_database(p4k, &chrparams, endpoints)?;
     let paired = caf_anchored_remap(&db, &chrparams, include_unmatched_dba_blocks, |caf_path| {
@@ -224,6 +229,38 @@ pub(crate) fn loose_caf_clips(
         log::warn!("[anim] loose CAF {caf_path} is stored but unusable: {error}");
         Vec::new()
     })
+}
+
+/// The archive files under the engine directory `dir` (its components matched case-insensitively), as
+/// engine paths (`Animations/...`, `/`-separated); recursively when `recursive`.
+fn archive_files_under(p4k: &starbreaker_p4k::MappedP4k, dir: &str, recursive: bool) -> Vec<String> {
+    use starbreaker_p4k::DirEntry;
+    let wanted = crate::pipeline::datacore_path_to_p4k(dir);
+    let mut current = String::new();
+    for component in wanted.split('\\').filter(|c| !c.is_empty()) {
+        let found = p4k.list_dir(&current).into_iter().find_map(|e| match e {
+            DirEntry::Directory(name) if name.eq_ignore_ascii_case(component) => Some(name),
+            _ => None,
+        });
+        let Some(name) = found else { return Vec::new() };
+        current = if current.is_empty() { name } else { format!("{current}\\{name}") };
+    }
+    let mut out = Vec::new();
+    let mut pending = vec![current];
+    while let Some(at) = pending.pop() {
+        for entry in p4k.list_dir(&at) {
+            match entry {
+                DirEntry::File(file) => {
+                    let engine = file.name.strip_prefix("Data\\").unwrap_or(&file.name);
+                    out.push(engine.replace('\\', "/"));
+                }
+                DirEntry::Directory(name) if recursive => pending.push(format!("{at}\\{name}")),
+                DirEntry::Directory(_) => {}
+            }
+        }
+    }
+    out.sort();
+    out
 }
 
 /// Helper: swap file extension. E.g., "file.chr" → "file.chrparams"

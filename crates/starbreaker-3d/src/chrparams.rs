@@ -54,6 +54,12 @@ pub struct ChrParams {
     /// variant clips or fallback entries. `animations` preserves the first
     /// declaration for backwards compatibility; this map keeps the full list.
     pub animation_paths: BTreeMap<String, Vec<String>>,
+    /// Wildcard entries (`<Animation name="**/*.caf" .../>`), each resolved under
+    /// its `#filepath` (`Animations/.../p6lr/**/*.caf`): every `.caf` they match
+    /// is an animation named after its file. A rig with a tracks database gets
+    /// them from it (its database-only clips); one without plays the loose files
+    /// ([`ChrParams::expand_wildcards`]).
+    pub wildcards: Vec<String>,
 }
 
 impl ChrParams {
@@ -113,8 +119,12 @@ impl ChrParams {
 
     fn record_animation_path(&mut self, name: &str, path: &str) {
         // Wildcard names declare mapping rules, not playable event identifiers.
-        // DBA-only clips remain discoverable through the metadata catalogue.
+        // DBA-only clips remain discoverable through the metadata catalogue; a
+        // rig without a database expands them over its loose files.
         if name.contains(['*', '?']) {
+            if path.contains(['*', '?']) {
+                self.wildcards.push(path.to_string());
+            }
             return;
         }
         let key = name.to_string();
@@ -125,6 +135,57 @@ impl ChrParams {
             .push(value.clone());
         self.animations.entry(key).or_insert(value);
     }
+}
+
+impl ChrParams {
+    /// Each wildcard entry as the engine reads it: every file under its
+    /// directory (recursively for a `**/` rule) whose name matches its last
+    /// segment is an animation named after its file stem, at its own path. A
+    /// declared name keeps its declared path. `files(dir, recursive)` lists the
+    /// archive files under the engine path `dir` (engine paths, `/`-separated).
+    pub fn expand_wildcards(&mut self, files: impl Fn(&str, bool) -> Vec<String>) {
+        for rule in std::mem::take(&mut self.wildcards) {
+            let segments: Vec<&str> = rule.split(['/', '\\']).collect();
+            let Some(first) = segments.iter().position(|s| s.contains(['*', '?'])) else { continue };
+            let dir = segments[..first].join("/");
+            let recursive = segments[first] == "**";
+            let Some(pattern) = segments.last().copied() else { continue };
+            for path in files(&dir, recursive) {
+                let base = path.rsplit(['/', '\\']).next().unwrap_or(&path);
+                if !glob_match(pattern, base) {
+                    continue;
+                }
+                let stem = base.rsplit_once('.').map_or(base, |(s, _)| s);
+                if !self.animations.contains_key(stem) {
+                    self.record_animation_path(stem, &path);
+                }
+            }
+            self.wildcards.push(rule);
+        }
+    }
+}
+
+/// `name` matches `pattern` (`*` any run, `?` one character; case-insensitive).
+fn glob_match(pattern: &str, name: &str) -> bool {
+    let (p, n): (Vec<char>, Vec<char>) = (pattern.to_lowercase().chars().collect(), name.to_lowercase().chars().collect());
+    let (mut pi, mut ni, mut star, mut mark) = (0usize, 0usize, None::<usize>, 0usize);
+    while ni < n.len() {
+        if pi < p.len() && (p[pi] == '?' || p[pi] == n[ni]) {
+            pi += 1;
+            ni += 1;
+        } else if pi < p.len() && p[pi] == '*' {
+            star = Some(pi);
+            mark = ni;
+            pi += 1;
+        } else if let Some(s) = star {
+            pi = s + 1;
+            mark += 1;
+            ni = mark;
+        } else {
+            return false;
+        }
+    }
+    p[pi..].iter().all(|&c| c == '*')
 }
 
 /// `path` under the `#filepath` directory in effect, joined by exactly one separator, or as
@@ -201,6 +262,31 @@ pub fn parse_animevents_targets(data: &[u8]) -> Result<HashMap<String, Vec<Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_wildcard_rule_without_a_database_names_each_loose_caf_after_its_file() {
+        // Synthetic paths, shaped like a weapon whose chrparams declares only `#filepath` and `**/*.caf`.
+        let mut cp = ChrParams::from_entries([
+            ("#filepath", "Animations/synthetic/rifle"),
+            ("**/*.caf", "**/*.caf"),
+            ("rifle_reload", "rifle_reload_declared.caf"),
+        ]);
+        assert_eq!(cp.wildcards, vec!["Animations/synthetic/rifle/**/*.caf".to_string()]);
+        assert!(cp.tracks_database.is_none());
+        cp.expand_wildcards(|dir, recursive| {
+            assert_eq!((dir, recursive), ("Animations/synthetic/rifle", true));
+            vec![
+                "Animations/synthetic/rifle/rifle_fire_trigger_01.caf".to_string(),
+                "Animations/synthetic/rifle/sub/rifle_fire_bolt_01.CAF".to_string(),
+                "Animations/synthetic/rifle/rifle_reload.caf".to_string(),
+                "Animations/synthetic/rifle/notes.xml".to_string(),
+            ]
+        });
+        assert_eq!(cp.animations.get("rifle_fire_trigger_01").map(String::as_str), Some("Animations/synthetic/rifle/rifle_fire_trigger_01.caf"));
+        assert_eq!(cp.animations.get("rifle_fire_bolt_01").map(String::as_str), Some("Animations/synthetic/rifle/sub/rifle_fire_bolt_01.CAF"));
+        assert_eq!(cp.animations.get("rifle_reload").map(String::as_str), Some("Animations/synthetic/rifle/rifle_reload_declared.caf"), "a declared name keeps its path");
+        assert!(!cp.animations.contains_key("notes"), "only files the rule matches");
+    }
 
     #[test]
     fn parses_scorpius_right_chrparams_if_available() {
